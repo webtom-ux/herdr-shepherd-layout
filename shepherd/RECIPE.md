@@ -30,7 +30,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
      The columns, 15px from the left edge, are:
      - the number (right-aligned in 2 CH), then a 3.5 CH gap
      - the status mark (1 CH)
-     - the name (26 CH, truncated). An agent's name is drawn in its status color. A shell's
+     - the name (30 CH, truncated). An agent's name is drawn in its status color. A shell's
        name is `$ <tab name | process name | term-N>`.
      - `+N` for the agent's live sub-terminals (3 CH)
      - the machine, `lokal` for this one (10 CH)
@@ -72,7 +72,11 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   selects it. Clicking a header selects its first terminal. The mouse wheel scrolls whole
   rows. The selection survives restarts.
 - **Peek.** A double click or Enter on an empty line opens a centered dialog (80%×80%): the
-  shipped `peek` bar (30px) over the live terminal, which gets focus. Escape closes it.
+  shipped `peek` bar (30px) over the live terminal, which gets focus, plus a 0px block with a
+  guard copy of the mod. While it is open the keyboard stays in it: if the command line takes
+  focus, it hands it straight back with `pane.focus`. Escape closes it, selects that agent's
+  row and gives the keyboard back to the list, so ↑/↓ go on from there. ⌘↩ closes it too and
+  puts the keyboard on the command line (`Tippen für <name>`), as it does without a peek.
 - **Typing.** Plain text plus Enter is sent to the selected terminal (`hc send`) and the line
   shows `→ <name>`.
 - **Commands.** Each one autocompletes as you type. ↑/↓ pick a suggestion, Tab fills it in,
@@ -94,11 +98,16 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
     line), `done` closes all finished agents, `shells` all shells, `space [name]` a whole
     space. The question names how many agents are still working, and whether the last tab of
     a space goes too. Enter confirms, Escape cancels, and typing anything also cancels.
-- **Escape**, in order: cancels a pending confirmation, else closes the peek, else clears the
-  line.
+- **Escape**, in order: cancels a pending confirmation, else closes the peek (selecting its
+  row), else clears the line.
 - **Names.** Each Claude session's first real request (4+ words, not a command) is named by
-  `claude -p --model haiku` into a 1–3 word kebab-case name, e.g. `stand-abfragen`. The name
-  is kept per session id and replaces the session or tab name in the list.
+  `claude -p --model haiku` into a 1–3 word kebab-case name, e.g. `stand-abfragen`, kept per
+  session id. In front goes a three-letter code of the session's repo (`origin`'s name, else
+  the git folder, else the working folder): initials of three or more words, the first letter
+  and next consonant of the first word plus the second's initial for two, the first letter and
+  next two consonants for one; up to three letters stay as they are (`webshop` → `wbs`,
+  `landing-page` → `lnp`). The result, e.g. `wbs-stand-abfragen`, replaces the session or tab
+  name in the list.
 - **Refresh.** Terminal facts, sessions and quota refresh every 8s. The selected row's
   context and cache refresh every 3s and on every selection change.
 
@@ -114,7 +123,8 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   "none", width, height, at: { x: 0, y: top } })`. `top` is 28 on macOS with the system title
   bar, otherwise 0. The open window is remembered in `setShared("shepherd.window")` and
   closed before reopening, and again in `close()`.
-- **Keys.** `keys.json` needs `"layout:shepherd": { "escape": "shepherd.escape" }`, read
+- **Keys.** `keys.json` needs `"layout:shepherd": { "escape": "shepherd.escape", "cmd-enter":
+  "shepherd.type" }`, read
   through `nextCommand()`. The rest is `on_key_down` on the root plus gpui-base
   `InputState`/`Input` events (`change`, `submit`, `focus`, `blur`).
 - **herdr API.** `spaces`, `machines`, `panes`, `agents`, `terminals`, `knownAgents`, `home`,
@@ -129,6 +139,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   - `sh -c` to list folders and `~/dev` clones (on the `/machine`)
   - `test -e`
   - `python3 -I -c` to read a transcript's first request
+  - `git remote get-url origin` / `git rev-parse --show-toplevel` for the repo code
   - `claude -p --model haiku …` for names
   - `tail -c 600000` on the session transcript
   - for codex quota: `ls`/`grep` over `~/.codex/sessions`
@@ -153,6 +164,11 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 - Read transcripts with `python3`, not `readTextFile`. One message with an image is a
   multi-MB line.
 - The pending `/close` confirmation must clear as soon as anything is typed.
+- Closing the peek hands the keyboard back to its terminal, so the line is focused again after
+  80ms. A peek can also close without the mod (its ✕, a click beside it, its terminal ending),
+  so a guard copy of the mod rides in it as a 0px block, `{ mod: "shepherd", props: { guard:
+  <addr> } }`, sets `shared("shepherd.peek")` while it lives and clears it in `close()`.
+  Right after opening, the guard may not have reported yet, so the first 1.5s count as open.
 - Enter takes the highlighted suggestion, except for a `/space` path, which is created as
   typed.
 - The setup is assumed to have:

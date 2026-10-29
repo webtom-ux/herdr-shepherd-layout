@@ -61,6 +61,18 @@ const FONT = "Geist Mono";
 
 const num = (addr) => addr.replace(/^.*\/t?|^t/, "");
 const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}$]+/u, "").trim();
+// Three letters for a repo: the initials of its first three words, else of two words the
+// first word's first letter and next consonant plus the second's initial, else the first
+// letter and the next two consonants ("invoicing" inv, "landing-page" lnp).
+function abbr(name) {
+  const parts = name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9äöü]+/).filter(Boolean);
+  if (!parts.length) return "";
+  const cons = (w) => w.slice(1).replace(/[aeiouäöüy]/g, "") + w.slice(1);
+  if (parts.length === 1 && parts[0].length <= 3) return parts[0];
+  if (parts.length >= 3) return parts.slice(0, 3).map((w) => w[0]).join("");
+  if (parts.length === 2) return (parts[0][0] + (cons(parts[0])[0] ?? "") + parts[1][0]).slice(0, 3);
+  return (parts[0][0] + cons(parts[0])).slice(0, 3);
+}
 const machineOf = (addr) => (addr.includes("/") ? addr.split("/")[0] : null);
 const localAddr = (addr) => addr.replace(/^.*\//, "");
 
@@ -83,6 +95,9 @@ export default class Shepherd extends View {
     // The layout block only holds the place: Herdr keeps the keyboard with its
     // panes there, so the list lives in a frameless window over the block,
     // where the line and the keys reach it.
+    // A guard copy rides in the agent window and says while it is open, however it closes.
+    this.guard = Boolean(props()?.guard);
+    if (this.guard) return setShared("shepherd.peek", props().guard);
     this.host = !props()?.overlay;
     if (this.host) return;
     setShared("shepherd.window", props().overlay);
@@ -97,16 +112,25 @@ export default class Shepherd extends View {
     this.input.on("submit", (_e, cx) => { this.submit(cx); cx.notify(); });
     // The line keeps the keyboard: ↑/↓ reach the list from it, Enter submits it.
     this.typing = false;
-    this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
+    this.input.on("focus", (_e, cx) => {
+      // While an agent is open the keyboard stays in its window; the line takes it only once it's closed.
+      // Just opened, the guard may not have said so yet.
+      if (this.peeked && (Date.now() - this.peekAt < 1500 || this.peekOpen())) return run("pane.focus", { terminal: this.peekedAddr });
+      this.peeked = null;
+      this.typing = true;
+      cx.notify();
+    });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.input.focus();
-    // Escape (keys.json, layout:shepherd) closes the open agent, else clears the line.
+    // Escape (keys.json, layout:shepherd) closes the open agent, else clears the line;
+    // ⌘↩ (shepherd.type) closes it too and puts the keyboard on the line, for the selected row.
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
+        if (c === "type") { const was = this.peeked; this.toLine(); if (was) { await cx.sleep(80); this.input.focus(); } cx.notify(); continue; }
         if (c !== "escape") continue;
         if (this.confirm) { this.confirm = null; this.msg = null; }
-        else if (this.peeked) { closeOverlay(this.peeked); this.peeked = null; this.input.focus(); }
+        else if (this.peeked && this.peekOpen()) { this.closePeek(); await cx.sleep(80); this.input.focus(); }
         else { this.input.set_value(""); this.text = ""; this.msg = null; }
         cx.notify();
       }
@@ -116,6 +140,7 @@ export default class Shepherd extends View {
     this.stars = JSON.parse(localStorage.getItem("stars") ?? "[]");
     this.short = JSON.parse(localStorage.getItem("short") ?? "{}"); // session id → short name
     this.naming = new Set(); // session ids being named
+    this.repoOf = {};        // session cwd → its repo's name (origin, else the repo folder, else the folder)
     this.cfg = { who: "claude", where: null, model: null, effort: "medium", ...JSON.parse(localStorage.getItem("cfg") ?? "{}") };
     this.info = {};     // address → hc get facts
     this.sess = {};     // address → Claude Code session (name, id, cwd)
@@ -194,6 +219,7 @@ export default class Shepherd extends View {
           const s = JSON.parse((await readTextFile(`${home()}/.claude/sessions/${pid}.json`, { on })) ?? "null");
           if (s) this.sess[addr] = { name: s.name, id: s.sessionId, cwd: s.cwd, on };
           if (s && !this.short[s.sessionId]) this.nameSession(this.sess[addr]);
+          if (s && !(s.cwd in this.repoOf)) this.findRepo(s.cwd, on);
         }
       } catch {}
     }
@@ -218,6 +244,23 @@ export default class Shepherd extends View {
       this.short[s.id] = name;
       localStorage.setItem("short", JSON.stringify(this.short));
     } catch {} finally { this.naming.delete(s.id); }
+  }
+
+  // "psd-mail-filter": the repo's three letters, then the short name of the first request.
+  shortName(s) {
+    const short = s && this.short[s.id];
+    if (!short) return null;
+    const a = abbr(this.repoOf[s.cwd] ?? "");
+    return a ? `${a}-${short}` : short;
+  }
+
+  async findRepo(cwd, on) {
+    this.repoOf[cwd] = cwd.split("/").pop();
+    try {
+      const r = await exec("sh", ["-c", 'u=$(git -C "$1" remote get-url origin 2>/dev/null) && { basename "$u" .git; exit; }; t=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) && basename "$t"', "sh", cwd], { on });
+      const name = (r.stdout ?? "").trim();
+      if (name) this.repoOf[cwd] = name;
+    } catch {}
   }
 
   async loadQuota() {
@@ -299,7 +342,7 @@ export default class Shepherd extends View {
         const agent = Boolean(p.program?.agent || p.status);
         const fg = g.foreground?.argv?.[0]?.split("/").pop();
         const name = agent
-          ? this.short[this.sess[p.terminal]?.id] || this.sess[p.terminal]?.name || (tab.named ? tab.name : null) || g.name || clean(p.title) || p.program?.name
+          ? this.shortName(this.sess[p.terminal]) || this.sess[p.terminal]?.name || (tab.named ? tab.name : null) || g.name || clean(p.title) || p.program?.name
           : `$ ${tab.named ? tab.name : g.name || `term-${num(p.terminal)}`}`;
         return {
           key: p.terminal, kind: "term", addr: p.terminal, pane: p.pane, tab: p.tab, space: sp, agent,
@@ -410,6 +453,25 @@ export default class Shepherd extends View {
       make();
       cx.notify();
     });
+  }
+
+  // Closes the open agent and selects its row, so ↑/↓ go on from there.
+  // Herdr hands the keyboard back to the terminal as it closes, so callers focus the line after a beat.
+  closePeek() {
+    closeOverlay(this.peeked);
+    this.peeked = null;
+    const i = this.rows.findIndex((r) => r.key === this.peekedAddr);
+    if (i >= 0) { this.selKey = this.peekedAddr; this.reveal(i); this.save(); }
+    this.input.focus();
+  }
+
+  // The line takes the keyboard, its next text going to the selected row.
+  toLine() {
+    if (this.peeked) this.closePeek();
+    this.confirm = null;
+    const r = this.selected();
+    this.msg = r?.kind === "term" ? { text: `Tippen für ${r.name}`, color: C.dim } : null;
+    this.input.focus();
   }
 
   // Ask before closing: the selected row, every finished agent, or every shell.
@@ -544,7 +606,7 @@ export default class Shepherd extends View {
     const text = this.text.trim();
     const r = this.selected();
     this.msg = null;
-    if (!text) { if (r?.kind === "term") this.peek(r.addr); return; }
+    if (!text) { if (r?.kind === "term") this.peek(r.addr, cx); return; }
     this.input.set_value("");
     this.text = "";
     const m = text.match(/^\/(\w+)\s*(.*)$/);
@@ -624,24 +686,34 @@ export default class Shepherd extends View {
     if (this.rows[i]?.kind === "space") key = this.rows[i + 1]?.kind === "term" ? this.rows[i + 1].key : this.selKey;
     this.selKey = key;
     this.save();
-    this.input.focus();
     const r = this.rows.find((x) => x.key === key);
-    if (twice && r?.kind === "term") this.peek(r.addr);
+    if (twice && r?.kind === "term") this.peek(r.addr, cx);
+    else this.input.focus();
     cx.spawn(async (cx) => { await this.refreshSelected(); cx.notify(); });
     cx.notify();
   }
 
   // The agent's terminal over the list, with the peek bar on top. Opened here
   // rather than with terminal.peek, so Escape knows which overlay to close.
-  peek(addr) {
+  peek(addr, cx) {
     if (this.peeked) closeOverlay(this.peeked);
     this.peeked = openOverlay({ kind: "dialog", width: 0.8, height: 0.8, layout: { type: "column", children: [
       { type: "block", size: { px: 30 }, content: { mod: "peek", props: { terminal: addr } } },
       { type: "block", content: { terminal: addr } },
+      { type: "block", size: { px: 0 }, content: { mod: "shepherd", props: { guard: addr } } },
     ] } });
     this.peekedAddr = addr;
+    this.peekAt = Date.now();
     run("pane.focus", { terminal: addr });
+    // Again after a beat, in case the line's focus from this same press lands later.
+    cx?.timer.after(80, () => { if (this.peekedAddr === addr && this.peeked) run("pane.focus", { terminal: addr }); });
   }
+
+  // Whether the agent window is still open: its ✕, a click beside it or its terminal ending close it without us.
+  peekOpen() {
+    return shared("shepherd.peek") === this.peekedAddr;
+  }
+
 
   // The pixel shepherd and the four counts.
   summary(rows) {
@@ -683,7 +755,7 @@ export default class Shepherd extends View {
       .child(div().w(3.5 * CH).flex_none())
       .child(div().w(CH).flex_none().child(icon))
       .child(div().w(0.55 * CH).flex_none())
-      .child(div().w(26 * CH).flex_none().truncate().when(r.agent, (el) => el.text_color(statusColor)).child(r.name))
+      .child(div().w(30 * CH).flex_none().truncate().when(r.agent, (el) => el.text_color(statusColor)).child(r.name))
       .child(div().w(3 * CH).flex_none().child(r.kids ? `+${r.kids}` : ""))
       .child(div().w(10 * CH).flex_none().pr(CH).truncate().child(r.space?.machine ?? "lokal"))
       .child(right(4, r.agent && r.changed ? ago(now - r.changed) : ""))
@@ -769,10 +841,12 @@ export default class Shepherd extends View {
   }
 
   async close() {
+    if (this.guard && shared("shepherd.peek") === props().guard) setShared("shepherd.peek", null);
     if (this.host && shared("shepherd.window")) closeOverlay(shared("shepherd.window"));
   }
 
   render(cx) {
+    if (this.guard) return div();
     if (this.host) return div().id("host").size_full().bg(C.bg).on_size_change((size) => this.place(size));
     const now = Date.now();
     const rows = (this.rows = this.buildRows());
@@ -788,6 +862,7 @@ export default class Shepherd extends View {
         else if (k === "pageup") this.move(-15, cx);
         else if (k === "pagedown") this.move(15, cx);
         else if (k === "backspace" && e.modifiers.platform && !this.text) this.askClose();
+        else if (k === "enter" && e.modifiers.platform) this.toLine();
         else if (k === "tab") this.accept(sugs[this.sugI] && { ...sugs[this.sugI], final: false }, cx);
         else if (k === "escape") { this.input.set_value(""); this.text = ""; this.msg = null; this.confirm = null; }
         else return;

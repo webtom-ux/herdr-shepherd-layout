@@ -10,7 +10,7 @@ The **Shepherd** layout for the Herdr app: every agent and terminal of every spa
 2. Copy `shepherd/mods/shepherd` into `~/.config/herdr-app/mods/`.
 3. Add this to `~/.config/herdr-app/keys.json`:
    ```json
-   "layout:shepherd": { "escape": "shepherd.escape" }
+   "layout:shepherd": { "escape": "shepherd.escape", "cmd-enter": "shepherd.type" }
    ```
 4. Pick the `shepherd` layout in the Herdr settings (or run `layout.switch {"name":"shepherd"}`).
 
@@ -65,11 +65,12 @@ The info lines at the bottom show:
 | `↑` / `↓` | Select a row (headers are skipped) |
 | `PageUp` / `PageDown` | Jump 15 rows |
 | Click | Select a row; clicking a header selects that space's first terminal |
-| Double click, or `Enter` on an empty line | **Peek**: the agent's live terminal opens over the list |
+| Double click, or `Enter` on an empty line | **Peek**: the agent's live terminal opens over the list and keeps the keyboard while open |
 | Right click | Star / unstar the row (★) |
 | Text + `Enter` | Send the text to the selected terminal (shows `→ <name>`) |
 | `⌘⌫` on an empty line | Close the selected row (asks first) |
-| `Esc` | Cancel a pending confirmation, else close the peek, else clear the line |
+| `⌘↩` | Close the peek if open and put the cursor in the command line, for the selected row |
+| `Esc` | Cancel a pending confirmation, else close the peek (back in the list on that agent's row, so `↑`/`↓` go on from there), else clear the line |
 
 The selection and stars survive restarts.
 
@@ -115,6 +116,11 @@ space itself) would close.
 
 When a Claude session gets its first real request (four words or more, not a command),
 `claude -p --model haiku` gives it a short 1–3 word name, e.g. `stand-abfragen`.
+In front of it goes a three-letter code for the agent's repo (from `origin`, else the git or
+working folder), e.g. `wbs-stand-abfragen` for `webshop`. Three or more words give their
+initials (`Customer-Portal-App` → `cpa`), two words the first letter and next consonant of
+the first plus the second's initial (`landing-page` → `lnp`), one word its first letter and next
+two consonants (`invoicing` → `inv`); names of up to three letters stay as they are.
 That name replaces the session or tab name in the list. This only works with Claude Code.
 
 ### Refresh
