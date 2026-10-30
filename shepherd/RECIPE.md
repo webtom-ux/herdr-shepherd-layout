@@ -77,21 +77,30 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   focus, it hands it straight back with `pane.focus`. Escape closes it, selects that agent's
   row and gives the keyboard back to the list, so ↑/↓ go on from there. ⌘↩ closes it too and
   puts the keyboard on the command line (`Tippen für <name>`), as it does without a peek.
-- **Typing.** Plain text plus Enter is sent to the selected terminal (`hc send`) and the line
-  shows `→ <name>`.
+- **Typing.** Plain text plus Enter is sent to the selected terminal (`hc send <addr> -- <text>`,
+  so text starting with `-` stays text) and the line shows `→ <name>`. For a shell row it asks
+  first in `#f4e97a` ("Shell … führt das als Befehl aus: „…“ – senden?"), since a shell runs
+  what it gets: Enter on the empty line sends, Escape or typing cancels.
 - **Commands.** Each one autocompletes as you type. ↑/↓ pick a suggestion, Tab fills it in,
   and Enter applies it.
   - `/who` sets the agent for new agents: installed agents, otherwise `claude`/`codex`.
   - `/where` sets the target space by name; `.` or `-` means "the selected row's space".
-  - `/model` lists Claude models from `~/.shepherdr/cli-models.json`, or takes free text.
-  - `/effort` is one of `low medium high xhigh max`.
+  - `/model` lists the `/who` agent's models: Claude's from `~/.shepherdr/cli-models.json`
+    (shown with id and default effort), Codex/pi/grok's from their config and the models
+    their latest sessions used (`MODELS_SEEN`, read once at start). Free text works too.
+  - `/effort` lists the levels the agent takes: Claude's per model from cli-models.json,
+    else `codex: minimal low medium high xhigh`, `pi: off minimal low medium high xhigh`,
+    `grok: low medium high`. Picking a model or agent that doesn't take the current level
+    resets it to the model's default, else `medium`.
+  - Any command with values opens their list when Enter comes without one.
   - `/new <task>` opens a tab in `/where` running the `/who` agent with that first message.
     Typing on a header row needs `/new`.
   - `/space <folder> [name]` creates a space whose first tab runs the agent, and makes it the
     new `/where`. The folder is autocompleted from the folders under the typed path.
   - `/space gh:owner/repo` lists your GitHub repos (most recently pushed first) and reuses an
     existing clone under `~/dev`. Otherwise it clones into `~/dev/<repo>`, or
-    `~/dev/<owner>-<repo>` if that name is taken.
+    `~/dev/<owner>-<repo>` if that name is taken. Only `owner/repo` in `A-Z a-z 0-9 . _ -`,
+    no part starting with `-` and no `.`/`..` part, is taken.
   - `/machine` picks the computer for `/space` (`lokal`, or a saved herdr machine).
   - `/star`, or a right click on a row, toggles the star.
   - `/close` asks before closing anything. It closes the selection (also on ⌘⌫ with an empty

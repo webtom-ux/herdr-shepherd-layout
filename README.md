@@ -70,7 +70,7 @@ The info lines at the bottom show:
 | Click | Select a row; clicking a header selects that space's first terminal |
 | Double click, or `Enter` on an empty line | **Peek**: the agent's live terminal opens over the list and keeps the keyboard while open |
 | Right click | Star / unstar the row (★) |
-| Text + `Enter` | Send the text to the selected terminal (shows `→ <name>`) |
+| Text + `Enter` | Send the text to the selected agent (shows `→ <name>`). For a shell row it asks first, since the shell runs it as a command: `Enter` = send, `Esc` = cancel |
 | `⌘⌫` on an empty line | Close the selected row (asks first) |
 | `⌘↩` | Close the peek if open and put the cursor in the command line, for the selected row |
 | `Esc` | Cancel a pending confirmation, else close the peek (back in the list on that agent's row, so `↑`/`↓` go on from there), else clear the line |
@@ -81,7 +81,7 @@ The selection and stars survive restarts.
 
 Every command starts with `/` and is suggested as you type:
 `↑`/`↓` picks a suggestion, `Tab` fills it into the line, `Enter` runs it.
-A command without a value (e.g. `/effort`) lists the values it accepts.
+A command without a value (e.g. `/effort` + `Enter`) opens the list of values it accepts.
 
 #### Settings for new agents
 
@@ -89,8 +89,8 @@ A command without a value (e.g. `/effort`) lists the values it accepts.
 | --- | --- | --- |
 | `/who <agent>` | Which coding agent to start (installed agents, otherwise `claude`/`codex`) | `/who codex` |
 | `/where <space>` | Which space new agents start in. `.` or `-` = the selected row's space | `/where invoicing` |
-| `/model <model>` | Model for new agents. For Claude from `~/.shepherdr/cli-models.json`, otherwise free text | `/model Opus 5.5` |
-| `/effort <level>` | Effort: `low`, `medium`, `high`, `xhigh`, `max` | `/effort high` |
+| `/model <model>` | Model for new agents, listed for the `/who` agent: Claude's from `~/.shepherdr/cli-models.json` (with id and default effort), Codex/pi/grok's from their config and recent sessions. Free text works too | `/model Opus 5.5` |
+| `/effort <level>` | Effort, listed for the agent and model: Claude per model (`low`…`max`), Codex `minimal`…`xhigh`, pi `off`…`xhigh`, grok `low`/`medium`/`high`. A model that doesn't take the current level resets it to its default | `/effort high` |
 | `/machine <computer>` | Computer for new spaces: `lokal` (this one) or a saved Herdr machine | `/machine mini` |
 
 #### Starting agents and spaces

@@ -211,6 +211,54 @@ function codexWindows(rl, at) {
   const w = (x) => x && { used_percentage: x.used_percent, resets_at: x.resets_at ?? (x.resets_in_seconds != null ? (Date.parse(at) || Date.now()) / 1000 + x.resets_in_seconds : null) };
   return [[label(rl.primary, "5h"), w(rl.primary)], [label(rl.secondary, "7d"), w(rl.secondary)]];
 }
+// Prints {kind: [model, …]}: the models codex, pi and grok used, from config and sessions.
+const MODELS_SEEN = `
+import glob, json, os
+# Models each agent has used, newest first: from its config and its latest sessions.
+env = lambda k, d: os.environ.get(k) or os.path.expanduser(d)
+out = {}
+def add(k, m):
+    if isinstance(m, str) and m and m not in out.setdefault(k, []): out[k].append(m)
+def newest(pattern, n=80):
+    files = glob.glob(pattern, recursive=True)
+    files.sort(key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0, reverse=True)
+    return files[:n]
+def lines(path, n=400):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i >= n: break
+                try: yield json.loads(line)
+                except Exception: pass
+    except OSError: return
+codex = env("CODEX_HOME", "~/.codex")
+try:
+    for line in open(codex + "/config.toml"):
+        k, _, v = line.partition("=")
+        if k.strip() == "model": add("codex", v.strip().strip('"'))
+except OSError: pass
+for f in newest(codex + "/sessions/**/rollout-*.jsonl"):
+    for d in lines(f, 60):
+        if d.get("type") == "turn_context": add("codex", (d.get("payload") or {}).get("model")); break
+pi = env("PI_CODING_AGENT_DIR", "~/.pi/agent")
+try: add("pi", json.load(open(pi + "/settings.json")).get("defaultModel"))
+except Exception: pass
+for f in newest(pi + "/sessions/*/*.jsonl"):
+    for d in lines(f):
+        if d.get("type") == "model_change": add("pi", d.get("modelId"))
+        m = d.get("message") or {}
+        if m.get("role") == "assistant": add("pi", m.get("model"))
+for f in newest(env("GROK_HOME", "~/.grok") + "/sessions/*/*/summary.json"):
+    try: add("grok", json.load(open(f)).get("current_model_id"))
+    except Exception: pass
+print(json.dumps(out))
+`;
+// Effort levels each agent takes; Claude's come per model from cli-models.json.
+const AGENT_EFFORTS = {
+  codex: ["minimal", "low", "medium", "high", "xhigh"],
+  pi: ["off", "minimal", "low", "medium", "high", "xhigh"],
+  grok: ["low", "medium", "high"],
+};
 const CLONE_DIR = "dev"; // under home: where /space clones GitHub repos
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -308,7 +356,7 @@ export default class Shepherd extends View {
     this.sess = {};     // address → Claude Code session (name, id, cwd)
     this.ctx = {};      // address → context and cache of its session
     this.quota = {};    // agent kind → quota windows
-    this.models = { claude: [] };
+    this.models = { claude: [] }; // claude: {id, label, efforts}; others: model names
     this.agentsKnown = [];
     this.repos = [];    // GitHub repos, for /space gh:
     this.clones = {};   // owner/repo (lower case) → its folder under ~/dev
@@ -329,9 +377,14 @@ export default class Shepherd extends View {
     try {
       const m = JSON.parse((await readTextFile(`${home()}/.shepherdr/cli-models.json`)) ?? "{}");
       this.models.claude = [...(m.claude?.models ?? []), ...(m.claude?.others ?? [])];
+      this.claudeEfforts = m.claude?.efforts;
       if (!this.cfg.model) this.cfg.model = (m.claude?.models ?? []).find((x) => x.id === m.claude?.default)?.label ?? "Opus 5.5";
     } catch {}
     try { this.agentsKnown = await knownAgents(); } catch {}
+    try {
+      const r = await exec("python3", ["-I", "-c", MODELS_SEEN]);
+      Object.assign(this.models, JSON.parse(r.stdout.trim() || "{}"));
+    } catch {}
     await this.loadRepos();
   }
 
@@ -613,6 +666,9 @@ export default class Shepherd extends View {
     const words = arg.split(/\s+/);
     const gi = words.findIndex((w) => /^gh:/i.test(w));
     const repo = gi < 0 ? null : words.splice(gi, 1)[0].slice(3);
+    // owner/repo in GitHub's characters only: no leading "-" (a gh flag), no "." or ".." parts.
+    if (repo && !/^[A-Za-z0-9_.][A-Za-z0-9_.-]*\/[A-Za-z0-9_.][A-Za-z0-9_.-]*$/.test(repo) || /(^|\/)\.\.?($|\/)/.test(repo ?? ""))
+      return (this.msg = { text: `Kein gültiges Repo „${repo}“ (owner/repo)` });
     const i = words.findIndex((w) => /^[~/.]/.test(w));
     let folder = i < 0 ? null : words.splice(i, 1)[0].replace(/^~(?=\/|$)/, this.mhome);
     const on = this.cfg.machine ?? undefined;
@@ -738,9 +794,16 @@ export default class Shepherd extends View {
     if (cmd === "machine") return ["lokal", ...machines().filter((m) => m.name && !m.temporary).map((m) => m.name)];
     if (cmd === "who") return (this.agentsKnown.length ? this.agentsKnown.filter((a) => a.installed).map((a) => programKey(a) ?? a.key) : ["claude", "codex"]);
     if (cmd === "where") return spaces().map((s) => s.name);
-    if (cmd === "model") return this.cfg.who === "claude" ? this.models.claude.map((m) => m.label) : [];
-    if (cmd === "effort") return EFFORTS;
+    if (cmd === "model") return this.cfg.who === "claude" ? this.models.claude.map((m) => m.label) : this.models[this.cfg.who] ?? [];
+    if (cmd === "effort") return this.efforts();
     return [];
+  }
+
+  // The /who agent's effort levels; for Claude those of the /model, else of its main models.
+  efforts() {
+    if (this.cfg.who !== "claude") return AGENT_EFFORTS[this.cfg.who] ?? EFFORTS;
+    const m = this.models.claude.find((x) => x.label === this.cfg.model || x.id === this.cfg.model);
+    return m?.efforts?.length ? m.efforts : this.claudeEfforts ?? EFFORTS;
   }
 
   command(cmd, arg, cx) {
@@ -764,29 +827,49 @@ export default class Shepherd extends View {
       return cx?.spawn(async (cx) => { await this.loadMachine(); cx.notify(); });
     }
     if (!["who", "where", "model", "effort"].includes(cmd)) return (this.msg = { text: `Unbekannt: /${cmd}  (/who /where /model /effort /new /space /machine /star)` });
-    if (!arg) return (this.msg = { text: `/${cmd}: ${this.options(cmd).join("  ") || "Name eingeben"}` });
+    // Without a value the line opens the list to pick from.
+    if (!arg) {
+      if (!this.options(cmd).length) return (this.msg = { text: `/${cmd}: Name eingeben` });
+      this.input.set_value(`/${cmd} `);
+      this.text = `/${cmd} `;
+      return;
+    }
     if (cmd === "where") {
       if (arg === "." || arg === "-") return set("where", null, "gewählter Space");
       const sp = spaces().find((s) => s.name.toLowerCase() === arg.toLowerCase()) ?? spaces().find((s) => s.name.toLowerCase().includes(arg.toLowerCase()));
       return sp ? set("where", sp.id, sp.name) : (this.msg = { text: `Kein Space „${arg}“` });
     }
-    if (cmd === "effort") { const e = pick(EFFORTS); return e ? set("effort", e) : (this.msg = { text: `effort: ${EFFORTS.join(" ")}` }); }
+    if (cmd === "effort") { const e = pick(this.efforts()); return e ? set("effort", e) : (this.msg = { text: `effort: ${this.efforts().join(" ")}` }); }
     if (cmd === "model") {
       const list = this.options("model");
-      return set("model", (list.length && pick(list)) || arg);
+      set("model", (list.length && pick(list)) || arg);
+      // An effort the new model doesn't take falls back to its default (or medium).
+      const efforts = this.efforts();
+      if (!efforts.includes(this.cfg.effort)) {
+        const m = this.models.claude.find((x) => x.label === this.cfg.model);
+        this.cfg.effort = (this.cfg.who === "claude" && m?.effort) || (efforts.includes("medium") ? "medium" : efforts[0]);
+        this.save();
+        this.msg = { text: `model → ${this.cfg.model} · effort → ${this.cfg.effort}`, ok: true };
+      }
+      return;
     }
     if (cmd === "who") {
       const v = pick(this.options("who")) ?? arg;
       set("who", v);
-      if (v !== "claude") this.cfg.model = null;
-      else if (!this.cfg.model) this.cfg.model = "Opus 5.5";
+      if (v !== "claude") this.cfg.model = this.models[v]?.[0] ?? null;
+      else if (!this.models.claude.some((m) => m.label === this.cfg.model)) this.cfg.model = "Opus 5.5";
+      if (!this.efforts().includes(this.cfg.effort)) this.cfg.effort = this.efforts().includes("medium") ? "medium" : this.efforts()[0];
       this.save();
       this.loadQuota();
     }
   }
 
   submit(cx) {
-    if (this.confirm && !this.text.trim()) { const list = this.confirm; this.confirm = null; return this.closeRows(list); }
+    if (this.confirm && !this.text.trim()) {
+      const c = this.confirm;
+      this.confirm = null;
+      return c.send ? this.send(c.send, c.text, cx) : this.closeRows(c);
+    }
     this.confirm = null;
     const sug = this.suggestions()[this.sugI];
     // Enter takes the highlighted suggestion, except a /space path, which Enter creates as typed.
@@ -800,8 +883,19 @@ export default class Shepherd extends View {
     const m = text.match(/^\/(\w+)\s*(.*)$/);
     if (m) return this.command(m[1].toLowerCase(), m[2].trim(), cx);
     if (r?.kind !== "term") return (this.msg = { text: "Erst eine Agent-Zeile wählen (oder /new <Auftrag>)" });
+    // A shell runs what it gets, so text for one is asked about first.
+    if (!r.agent) {
+      this.confirm = { send: r, text };
+      this.msg = { text: `Shell ${r.name} führt das als Befehl aus: „${text}“ – senden?  Enter = ja · Esc = nein`, color: C.star };
+      return;
+    }
+    this.send(r, text, cx);
+  }
+
+  send(r, text, cx) {
     cx.spawn(async (cx) => {
-      const res = await hc(["send", r.addr, text]);
+      // "--": text starting with "-" stays text, not an option of hc.
+      const res = await hc(["send", r.addr, "--", text]);
       this.msg = res.code === 0 ? { text: `→ ${r.name}`, ok: true } : { text: res.stderr.trim() || "Senden fehlgeschlagen" };
       cx.notify();
     });
@@ -838,7 +932,11 @@ export default class Shepherd extends View {
     const starts = opts.filter((o) => o.toLowerCase().startsWith(low));
     const has = opts.filter((o) => !starts.includes(o) && o.toLowerCase().includes(low));
     const cur = { who: this.cfg.who, where: this.whereSpace()?.name, model: this.cfg.model, effort: this.cfg.effort, machine: this.cfg.machine ?? "lokal" }[cmd];
-    return [...starts, ...has].map((o) => ({ label: o, desc: o === cur ? "aktuell" : null, value: `/${cmd} ${o}`, final: true }));
+    const info = (o) => {
+      const m = cmd === "model" && this.cfg.who === "claude" && this.models.claude.find((x) => x.label === o);
+      return [o === cur ? "aktuell" : null, m ? m.id : null, m?.effort ? `effort ${m.effort}` : null].filter(Boolean).join(" · ") || null;
+    };
+    return [...starts, ...has].map((o) => ({ label: o, desc: info(o), value: `/${cmd} ${o}`, final: true }));
   }
 
   // Folders under the typed path, for /space; ~ stays ~ in the list.
