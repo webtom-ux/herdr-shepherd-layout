@@ -108,6 +108,16 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   next two consonants for one; up to three letters stay as they are (`webshop` → `wbs`,
   `landing-page` → `lnp`). The result, e.g. `wbs-stand-abfragen`, replaces the session or tab
   name in the list.
+- **Codex.** A row is Codex when its status app starts with `codex` or its foreground argv has
+  `codex`/`codex.js`. Its rollout is the `rollout-*.jsonl` the process or a child holds open
+  (`lsof`), else the one under `${CODEX_HOME:-~/.codex}/sessions` with the same `cwd` in its
+  `session_meta` that started closest to the process (`ps -o etime=`). It is looked up again
+  when the pid changes. From it come the first request (`event_msg`/`user_message`) for the
+  name, `ctx` (the last `token_count`'s `last_token_usage.total_tokens` of
+  `model_context_window`), model and effort (`turn_context`) and quota (`rate_limits`
+  `primary`/`secondary`, labelled by `window_minutes`, resets from `resets_at` or
+  `resets_in_seconds`). Codex keeps no cache time, so `cache` shows `—`. The quota line also
+  reads the newest rollout on every refresh.
 - **Refresh.** Terminal facts, sessions and quota refresh every 8s. The selected row's
   context and cache refresh every 3s and on every selection change.
 
@@ -138,11 +148,12 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   - `gh api user/repos …` and `gh repo clone`
   - `sh -c` to list folders and `~/dev` clones (on the `/machine`)
   - `test -e`
-  - `python3 -I -c` to read a transcript's first request
+  - `python3 -I -c` to read a transcript's first request, and to find and read Codex rollouts
+    (with `pgrep`, `lsof`, `ps`)
   - `git remote get-url origin` / `git rev-parse --show-toplevel` for the repo code
   - `claude -p --model haiku …` for names
   - `tail -c 600000` on the session transcript
-  - for codex quota: `ls`/`grep` over `~/.codex/sessions`
+  - for codex quota: `ls` over `~/.codex/sessions`
 - **Files it reads:**
   - `~/.claude/sessions/<pid>.json`
   - `~/.claude/projects/<cwd-slug>/<id>.jsonl`
@@ -180,8 +191,9 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
     `keine Daten`.
   - `~/dev` as the clone folder (`CLONE_DIR`)
   - the font `Geist Mono` installed
-- Codex quota is read only while `/who` is `codex`. Gemini and others show no quota.
-- Session names and the context/cache/quota line only work for Claude Code.
+- The quota line shows the `/who` agent. Gemini and others show no quota.
+- Session names and the context line work for Claude Code and Codex; `cache` only for Claude.
+- The Codex part was written against Codex's rollout format without a live Codex to try it on.
 - The `+N` column counts live terminals whose `parent` is the row's terminal.
 
 ## Done when

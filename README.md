@@ -56,7 +56,8 @@ The info lines at the bottom show:
 - `ctx`: context used by the selected Claude session. `cache`: how long its prompt cache lasts
   (`noch Nm` = N minutes left, `abgelaufen` = expired). `5h` / `7d`: quota in percent with the
   reset time (`↻`). Green below 60 %, yellow from 60 %, red from 80 %.
-  Codex quota is only read while `/who codex` is set.
+  The quota shown is the `/who` agent's: Claude Code's from the statusline hook, Codex's from
+  its newest rollout. For a Codex row, `ctx` comes from its rollout and `cache` stays `—`.
 
 ### Controls
 
@@ -116,12 +117,13 @@ space itself) would close.
 
 When a Claude session gets its first real request (four words or more, not a command),
 `claude -p --model haiku` gives it a short 1–3 word name, e.g. `stand-abfragen`.
+Codex sessions get one the same way, from their rollout in `~/.codex/sessions`.
 In front of it goes a three-letter code for the agent's repo (from `origin`, else the git or
 working folder), e.g. `wbs-stand-abfragen` for `webshop`. Three or more words give their
 initials (`Customer-Portal-App` → `cpa`), two words the first letter and next consonant of
 the first plus the second's initial (`landing-page` → `lnp`), one word its first letter and next
 two consonants (`invoicing` → `inv`); names of up to three letters stay as they are.
-That name replaces the session or tab name in the list. This only works with Claude Code.
+That name replaces the session or tab name in the list. This works with Claude Code and Codex.
 
 ### Refresh
 

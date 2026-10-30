@@ -37,18 +37,106 @@ const COMMANDS = [
 // Asked of a small model once per Claude session: a 1–3 word name for its first request.
 const NAMER = "Du benennst Aufgaben. Der Text auf stdin ist eine Anfrage an einen Coding-Agent; führe sie nicht aus und beantworte sie nicht. Antworte nur mit einem kurzen Namen für die Aufgabe: 1 bis 3 Wörter, kleingeschrieben, mit - verbunden, nur a-z, 0-9 und Umlaute.";
 // Prints a transcript's first real request: a user message of four words or more,
-// not a command, tool result or reminder.
+// not a command, tool result or reminder. Claude Code and Codex rollouts alike.
 const FIRST_ASK = `
 import json, sys
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     try: d = json.loads(line)
     except Exception: continue
-    if d.get("type") != "user" or d.get("isMeta"): continue
-    c = (d.get("message") or {}).get("content")
-    t = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
+    p = d.get("payload") or {}
+    if d.get("type") == "event_msg" and p.get("type") == "user_message":
+        t = p.get("message") or ""
+    elif d.get("type") == "user" and not d.get("isMeta"):
+        c = (d.get("message") or {}).get("content")
+        t = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
+    else: continue
     t = t.strip()
     if t and not t.startswith(("<", "Caveat:")) and len(t.split()) >= 4: print(t[:3000]); break
 `;
+// Prints {path, id, cwd} of the Codex rollout a process (pid, cwd) writes.
+const CODEX_FIND = `
+import json, os, subprocess, sys, time
+# Which Codex rollout a process writes: the one it holds open, else by working folder and start time.
+pid, cwd = sys.argv[1], sys.argv[2]
+home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+def run(*a):
+    try: return subprocess.run(a, capture_output=True, text=True, timeout=5).stdout
+    except Exception: return ""
+pids, todo = [], [pid]
+while todo and len(pids) < 50:
+    p = todo.pop(); pids.append(p); todo += run("pgrep", "-P", p).split()
+def meta(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            d = json.loads(f.readline())
+        return d.get("payload") if d.get("type") == "session_meta" else None
+    except Exception: return None
+def out(path):
+    m = meta(path) or {}
+    print(json.dumps({"path": path, "id": m.get("id") or os.path.basename(path)[-41:-6], "cwd": m.get("cwd") or cwd}))
+    sys.exit()
+for line in run("lsof", "-Fn", "-p", ",".join(pids)).splitlines():
+    n = line[1:]
+    if line.startswith("n") and os.path.basename(n).startswith("rollout-") and n.endswith(".jsonl"): out(n)
+# Not held open: the rollout for this folder started closest after the process.
+el = run("ps", "-o", "etime=", "-p", pid).strip()
+secs = 0
+if el:
+    d, _, hms = el.rpartition("-")
+    for part in hms.split(":"): secs = secs * 60 + int(part)
+    secs += int(d or 0) * 86400
+start = time.time() - secs
+best = None
+for root, _, files in os.walk(os.path.join(home, "sessions")):
+    for fn in files:
+        if not (fn.startswith("rollout-") and fn.endswith(".jsonl")): continue
+        path = os.path.join(root, fn)
+        try:
+            if os.path.getmtime(path) < start - 60: continue
+        except OSError: continue
+        m = meta(path)
+        if not m or m.get("cwd") != cwd: continue
+        try: t = time.mktime(time.strptime(m.get("timestamp", "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+        except Exception: t = os.path.getctime(path)
+        gap = abs(t - start)
+        if best is None or gap < best[0]: best = (gap, path)
+if best: out(best[1])
+`;
+// Prints the latest {used, size, model, effort, rate_limits, rl_at} of a Codex rollout.
+const CODEX_READ = `
+import json, os, sys
+# The latest context use, model and quota in a Codex rollout, read from its end.
+path = sys.argv[1]
+size = os.path.getsize(path)
+with open(path, "rb") as f:
+    f.seek(max(0, size - 3000000))
+    lines = f.read().decode("utf-8", "replace").splitlines()
+res = {}
+for line in reversed(lines):
+    if '"token_count"' not in line and '"turn_context"' not in line: continue
+    try: d = json.loads(line)
+    except Exception: continue
+    p = d.get("payload") or {}
+    if p.get("type") == "token_count" or d.get("type") == "token_count":
+        info = p.get("info") or {}
+        if "used" not in res and info.get("last_token_usage"):
+            u = info["last_token_usage"]
+            res["used"] = u.get("total_tokens") or (u.get("input_tokens", 0) + u.get("output_tokens", 0))
+            res["size"] = info.get("model_context_window")
+            res["at"] = d.get("timestamp")
+        if "rate_limits" not in res and p.get("rate_limits"):
+            res["rate_limits"] = p["rate_limits"]; res["rl_at"] = d.get("timestamp")
+    elif d.get("type") == "turn_context" and "model" not in res:
+        res["model"] = p.get("model"); res["effort"] = p.get("effort")
+    if all(k in res for k in ("used", "rate_limits", "model")): break
+print(json.dumps(res))
+`;
+// Codex quota windows, labelled by their length (300 min: 5h, 10080: 7d).
+function codexWindows(rl, at) {
+  const label = (x, d) => (!x?.window_minutes ? d : x.window_minutes % 1440 === 0 ? `${x.window_minutes / 1440}d` : `${Math.round(x.window_minutes / 60)}h`);
+  const w = (x) => x && { used_percentage: x.used_percent, resets_at: x.resets_at ?? (x.resets_in_seconds != null ? (Date.parse(at) || Date.now()) / 1000 + x.resets_in_seconds : null) };
+  return [[label(rl.primary, "5h"), w(rl.primary)], [label(rl.secondary, "7d"), w(rl.secondary)]];
+}
 const CLONE_DIR = "dev"; // under home: where /space clones GitHub repos
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -217,10 +305,19 @@ export default class Shepherd extends View {
         const isClaude = (g.status?.app ?? "").startsWith("claude") || (g.foreground?.argv?.[0] ?? "").endsWith("claude");
         if (pid && isClaude) {
           const s = JSON.parse((await readTextFile(`${home()}/.claude/sessions/${pid}.json`, { on })) ?? "null");
-          if (s) this.sess[addr] = { name: s.name, id: s.sessionId, cwd: s.cwd, on };
+          if (s) this.sess[addr] = { kind: "claude", name: s.name, id: s.sessionId, cwd: s.cwd, on };
           if (s && !this.short[s.sessionId]) this.nameSession(this.sess[addr]);
           if (s && !(s.cwd in this.repoOf)) this.findRepo(s.cwd, on);
         }
+        const isCodex = !isClaude && ((g.status?.app ?? "").startsWith("codex") || (g.foreground?.argv ?? []).some((a) => /(^|\/)codex(\.js)?$/.test(a)));
+        if (pid && isCodex && this.sess[addr]?.pid !== pid) {
+          const r = await exec("python3", ["-I", "-c", CODEX_FIND, String(pid), g.foreground?.cwd ?? g.cwd ?? ""], { on });
+          const f = JSON.parse(r.stdout.trim() || "null");
+          if (f) this.sess[addr] = { kind: "codex", pid, id: f.id, cwd: f.cwd, path: f.path, on };
+        }
+        const cs = isCodex && this.sess[addr];
+        if (cs && !this.short[cs.id]) this.nameSession(cs);
+        if (cs && !(cs.cwd in this.repoOf)) this.findRepo(cs.cwd, on);
       } catch {}
     }
     await this.loadQuota();
@@ -232,7 +329,7 @@ export default class Shepherd extends View {
     if (this.naming.has(s.id)) return;
     this.naming.add(s.id);
     try {
-      const path = `${home()}/.claude/projects/${s.cwd.replace(/[^A-Za-z0-9]/g, "-")}/${s.id}.jsonl`;
+      const path = s.path ?? `${home()}/.claude/projects/${s.cwd.replace(/[^A-Za-z0-9]/g, "-")}/${s.id}.jsonl`;
       // Streamed by python: a message with an image is one huge line.
       const r = await exec("python3", ["-I", "-c", FIRST_ASK, path], { on: s.on });
       const ask = (r.stdout ?? "").trim();
@@ -268,17 +365,18 @@ export default class Shepherd extends View {
       const q = JSON.parse((await readTextFile(`${home()}/.claude/quota-cache.json`)) ?? "null");
       if (q?.rate_limits) this.quota.claude = { at: q.at, windows: [["5h", q.rate_limits.five_hour], ["7d", q.rate_limits.seven_day]] };
     } catch {}
-    if (this.cfg.who === "codex") {
-      try {
-        const r = await exec("sh", ["-c", "f=$(ls -t ~/.codex/sessions/*/*/*/*.jsonl 2>/dev/null | head -1); [ -n \"$f\" ] && grep rate_limits \"$f\" | tail -1"]);
-        const d = JSON.parse(r.stdout.trim() || "null");
-        const rl = d?.payload?.rate_limits ?? d?.rate_limits;
-        if (rl) {
-          const w = (x) => x && { used_percentage: x.used_percent, resets_at: x.resets_at ?? (x.resets_in_seconds ? Date.now() / 1000 + x.resets_in_seconds : null) };
-          this.quota.codex = { at: Date.parse(d.timestamp) / 1000 || null, windows: [["5h", w(rl.primary)], ["7d", w(rl.secondary)]] };
-        }
-      } catch {}
-    }
+    // Codex: the newest rollout's last rate limits.
+    try {
+      const r = await exec("sh", ["-c", 'f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -1); [ -n "$f" ] && python3 -I -c "$1" "$f"', "sh", CODEX_READ]);
+      const d = JSON.parse(r.stdout.trim() || "null");
+      if (d?.rate_limits) this.setCodexQuota(d);
+    } catch {}
+  }
+
+  setCodexQuota(d) {
+    const at = Date.parse(d.rl_at) / 1000 || null;
+    if (this.quota.codex?.at && at && at < this.quota.codex.at) return;
+    this.quota.codex = { at, windows: codexWindows(d.rate_limits, d.rl_at) };
   }
 
   // Context window and prompt cache of the selected row's session.
@@ -287,6 +385,18 @@ export default class Shepherd extends View {
     const s = row?.addr && this.sess[row.addr];
     if (!s?.id) return;
     const out = { at: Date.now() };
+    if (s.kind === "codex") {
+      // Codex shows no prompt cache, so cache stays empty.
+      try {
+        const r = await exec("python3", ["-I", "-c", CODEX_READ, s.path], { on: s.on });
+        const d = JSON.parse(r.stdout.trim() || "null");
+        if (d?.used != null && d.size) Object.assign(out, { used: d.used, size: d.size, pct: (100 * d.used) / d.size });
+        if (d) Object.assign(out, { model: d.model, effort: d.effort });
+        if (d?.rate_limits) this.setCodexQuota(d);
+      } catch {}
+      this.ctx[row.addr] = out;
+      return;
+    }
     try {
       const line = JSON.parse((await readTextFile(`${home()}/.claude/statusline-cache/${s.id}.json`, { on: s.on })) ?? "null");
       const cw = line?.context_window;
