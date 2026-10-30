@@ -21,10 +21,11 @@ Requirements:
 - `python3` and `claude` on your PATH (for automatic names)
 - For `ctx`, `cache` and the quota display, a Claude Code statusline hook that writes
   `~/.claude/statusline-cache/<session>.json` and `~/.claude/quota-cache.json`.
-  Without it those fields show `—` or `keine Daten`.
+  Without it those fields show `—` or `no data for <agent>`.
 - Optional: `~/.shepherdr/cli-models.json` for the model list of `/model`
 
-The UI text is German; this guide quotes it as it appears on screen.
+The UI is in English by default; `/language de` switches it to German (`/language en` back). This
+guide quotes the English texts.
 
 ## Guide
 
@@ -36,7 +37,7 @@ The UI text is German; this guide quotes it as it appears on screen.
 | **List** | A colored header per space with its terminal count, then one row per terminal. Starred rows (★) come first. |
 | **Bottom** | Messages, the command line, and two info lines about your settings and the selected row's context. |
 
-Columns of a terminal row: number · status · name · `+N` (sub-terminals) · machine (`lokal` or its name) · time since the last status change · age of the terminal · program · title (the agent's status message, or a shell's foreground program).
+Columns of a terminal row: number · status · name · `+N` (sub-terminals) · machine (`local` or its name) · time since the last status change · age of the terminal · program · title (the agent's status message, or a shell's foreground program).
 
 Status marks:
 
@@ -54,7 +55,7 @@ The info lines at the bottom show:
 - `machine` · `where` · `who` · `model` · `effort`: where and with what new agents start.
   `where ·sel` means the selected row's space is used.
 - `ctx`: context used by the selected Claude session. `cache`: how long its prompt cache lasts
-  (`noch Nm` = N minutes left, `abgelaufen` = expired). `5h` / `7d`: quota in percent with the
+  (`Nm left`, `<1m left` or `expired`). `5h` / `7d`: quota in percent with the
   reset time (`↻`). Green below 60 %, yellow from 60 %, red from 80 %.
   The quota shown is the `/who` agent's: Claude Code's from the statusline hook, Codex's from
   its newest rollout. For a Codex, pi or grok row, `ctx` comes from its session file. pi and grok
@@ -91,7 +92,7 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 | `/where <space>` | Which space new agents start in. `.` or `-` = the selected row's space | `/where invoicing` |
 | `/model <model>` | Model for new agents, listed for the `/who` agent: Claude's from `~/.shepherdr/cli-models.json` (with id and default effort), Codex/pi/grok's from their config and recent sessions. Free text works too | `/model Opus 5.5` |
 | `/effort <level>` | Effort, listed for the agent and model: Claude per model (`low`…`max`), Codex `minimal`…`xhigh`, pi `off`…`xhigh`, grok `low`/`medium`/`high`. A model that doesn't take the current level resets it to its default | `/effort high` |
-| `/machine <computer>` | Computer for new spaces: `lokal` (this one) or a saved Herdr machine | `/machine mini` |
+| `/machine <computer>` | Computer for new spaces: `local` (this one) or a saved Herdr machine | `/machine mini` |
 
 #### Starting agents and spaces
 
@@ -106,6 +107,7 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 | Command | Effect |
 | --- | --- |
 | `/star` | Star or unstar the selected row (same as right click) |
+| `/language <en\|de>` | UI language, English (default) or German; kept across restarts |
 | `/close` | Close the selected row |
 | `/close done` | Close all finished agents |
 | `/close shells` | Close all shells |

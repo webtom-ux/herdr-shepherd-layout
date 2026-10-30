@@ -5,7 +5,7 @@ dense list, like a flock seen from a hill. A pixel-art shepherd and four colored
 (agents, working, paused, done) sit at the top, the list fills the middle, and a command line
 at the bottom sends text to the selected agent or starts new ones. You never see tabs or
 panes. A double click (or Enter on an empty line) opens an agent's live terminal over the
-list. The UI text is German.
+list. The UI is English by default and German with `/language de`.
 
 ![Shepherd](preview.png)
 
@@ -33,7 +33,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
      - the name (30 CH, truncated). An agent's name is drawn in its status color. A shell's
        name is `$ <tab name | process name | term-N>`.
      - `+N` for the agent's live sub-terminals (3 CH)
-     - the machine, `lokal` for this one (10 CH)
+     - the machine, `local` for this one (10 CH)
      - time since the last status change (4 CH, right-aligned, `12s`/`5m`/`2h`, agents only)
      - age of the terminal (5 CH, right-aligned)
      - the program (9 CH) in its color: `claude #ff9f43`, `codex #7dd3fc`, `gemini #8ab4f8`,
@@ -44,18 +44,18 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 3. **Footer**, with a 1px `#232842` top border, padded 10px top, 15px sides and 14px bottom.
    - Suggestions appear while a `/` command is typed: up to 7 rows of 14px text, 26px tall,
      the highlighted one on `#1b2140`. A 12px `#6f7388` hint follows
-     (`↑↓ wählen · Tab übernehmen · Enter setzen|übernehmen · i/n`).
+     (`↑↓ select · Tab fill in · Enter set|fill in · i/n`).
    - Otherwise a one-line message shows, green `#19d27c` for ok and `#f0315c` for errors or
      confirmations.
    - The command line: a semibold `›` (`#ff5c8a` while typing, otherwise `#6f7388`) and the
-     input. The placeholder reads `Klicken zum Tippen`, or while typing `Auftrag an <name> …`
-     or `Neuer <who> in <space> …`.
+     input. The placeholder reads `Click to type`, or while typing `Task for <name> …`
+     or `New <who> in <space> …`.
    - Two 13px key/value lines, keys in `#6f7388`:
      - `machine` · `where` (`#c4b5fd`, plus `·sel` when following the selection) · `who`
        (program color) · `model` · `effort`
      - `ctx` (used/size of the selected Claude session's context window, with a percentage)
-       · `cache` (`noch Nm`, `noch <1m` or `abgelaufen`) · `5h` and `7d` quota percentages
-       with reset times (`↻ 03:30`, or `↻ Sa 17:00` on another day). Percentages are green
+       · `cache` (`Nm left`, `<1m left` or `expired`) · `5h` and `7d` quota percentages
+       with reset times (`↻ 03:30`, or `↻ Sat 17:00` on another day). Percentages are green
        below 60, `#f4e97a` from 60 and red from 80.
 
 ## How it behaves
@@ -76,10 +76,10 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   guard copy of the mod. While it is open the keyboard stays in it: if the command line takes
   focus, it hands it straight back with `pane.focus`. Escape closes it, selects that agent's
   row and gives the keyboard back to the list, so ↑/↓ go on from there. ⌘↩ closes it too and
-  puts the keyboard on the command line (`Tippen für <name>`), as it does without a peek.
+  puts the keyboard on the command line (`Typing for <name>`), as it does without a peek.
 - **Typing.** Plain text plus Enter is sent to the selected terminal (`hc send <addr> -- <text>`,
   so text starting with `-` stays text) and the line shows `→ <name>`. For a shell row it asks
-  first in `#f4e97a` ("Shell … führt das als Befehl aus: „…“ – senden?"), since a shell runs
+  first in `#f4e97a` ("Shell … runs this as a command: “…” – send?"), since a shell runs
   what it gets: Enter on the empty line sends, Escape or typing cancels.
 - **Commands.** Each one autocompletes as you type. ↑/↓ pick a suggestion, Tab fills it in,
   and Enter applies it.
@@ -101,8 +101,12 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
     existing clone under `~/dev`. Otherwise it clones into `~/dev/<repo>`, or
     `~/dev/<owner>-<repo>` if that name is taken. Only `owner/repo` in `A-Z a-z 0-9 . _ -`,
     no part starting with `-` and no `.`/`..` part, is taken.
-  - `/machine` picks the computer for `/space` (`lokal`, or a saved herdr machine).
+  - `/machine` picks the computer for `/space` (`local`, or a saved herdr machine).
   - `/star`, or a right click on a row, toggles the star.
+  - `/language en|de` switches every UI text (messages, questions, placeholders, hints,
+    command descriptions, weekdays) between English (default) and German. All texts live in
+    one `TEXT` table in `main.js`; the choice is kept in `cfg.lang`. Command and option
+    keywords stay English in both (`/close selected`, `gewählt` is accepted too).
   - `/close` asks before closing anything. It closes the selection (also on ⌘⌫ with an empty
     line), `done` closes all finished agents, `shells` all shells, `space [name]` a whole
     space. The question names how many agents are still working, and whether the last tab of
@@ -213,7 +217,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   - Claude Code writing the session, statusline-cache and quota-cache files above. A
     statusline hook must write `~/.claude/statusline-cache/<session>.json` and
     `~/.claude/quota-cache.json`, otherwise `ctx`, `cache` and quota show `—` or
-    `keine Daten`.
+    `no data for <agent>`.
   - `~/dev` as the clone folder (`CLONE_DIR`)
   - the font `Geist Mono` installed
 - The quota line shows the `/who` agent. Gemini and others show no quota.
