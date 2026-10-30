@@ -133,3 +133,7 @@ That name replaces the session or tab name in the list. This works with Claude C
 
 Terminals, sessions and quota refresh every 8 seconds. The selected row's context and cache
 refresh every 3 seconds and whenever the selection changes.
+
+## License
+
+[MIT](LICENSE) © 2026 webtom-ux
