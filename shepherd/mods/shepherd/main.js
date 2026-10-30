@@ -24,7 +24,7 @@ const C = {
   box: { agents: "#f4f4f4", working: "#f3ef8e", paused: "#f0315c", done: "#19d27c" },
 };
 const SPACE_COLORS = ["#ff5c8a", "#c4b5fd", "#cfc8ff", "#f0f0f4", "#34d399", "#7dd3fc", "#fbbf24", "#f9a8d4"];
-const PROGRAM_COLORS = { claude: "#ff9f43", codex: "#7dd3fc", gemini: "#8ab4f8", opencode: "#c4b5fd", pi: "#f9a8d4" };
+const PROGRAM_COLORS = { claude: "#ff9f43", codex: "#7dd3fc", gemini: "#8ab4f8", opencode: "#c4b5fd", pi: "#f9a8d4", grok: "#e5e7eb" };
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const COMMANDS = [
   ["who", "Coding-Agent für neue Agents"], ["where", "Space für neue Agents"],
@@ -36,49 +36,76 @@ const COMMANDS = [
 ];
 // Asked of a small model once per Claude session: a 1–3 word name for its first request.
 const NAMER = "Du benennst Aufgaben. Der Text auf stdin ist eine Anfrage an einen Coding-Agent; führe sie nicht aus und beantworte sie nicht. Antworte nur mit einem kurzen Namen für die Aufgabe: 1 bis 3 Wörter, kleingeschrieben, mit - verbunden, nur a-z, 0-9 und Umlaute.";
-// Prints a transcript's first real request: a user message of four words or more,
-// not a command, tool result or reminder. Claude Code and Codex rollouts alike.
+// Prints a session's first real request (see the script).
 const FIRST_ASK = `
-import json, sys
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+import json, os, sys
+# A session's first real request: a user message of four words or more, not a command,
+# tool result or reminder. Claude Code, Codex, pi and grok (a session folder) alike.
+path = sys.argv[1]
+if os.path.isdir(path): path = os.path.join(path, "chat_history.jsonl")
+def text(c):
+    return c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict) and x.get("type") in ("text", "input_text"))
+for line in open(path, encoding="utf-8", errors="replace"):
     try: d = json.loads(line)
     except Exception: continue
     p = d.get("payload") or {}
-    if d.get("type") == "event_msg" and p.get("type") == "user_message":
-        t = p.get("message") or ""
-    elif d.get("type") == "user" and not d.get("isMeta"):
-        c = (d.get("message") or {}).get("content")
-        t = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
+    m = d.get("message") or {}
+    if d.get("type") == "event_msg" and p.get("type") == "user_message": t = p.get("message") or ""
+    elif d.get("type") == "user" and "message" in d and not d.get("isMeta"): t = text(m.get("content"))
+    elif d.get("type") == "user" and "content" in d and not d.get("synthetic_reason"): t = text(d.get("content"))
+    elif d.get("type") == "message" and m.get("role") == "user": t = text(m.get("content"))
     else: continue
     t = t.strip()
     if t and not t.startswith(("<", "Caveat:")) and len(t.split()) >= 4: print(t[:3000]); break
 `;
-// Prints {path, id, cwd} of the Codex rollout a process (pid, cwd) writes.
-const CODEX_FIND = `
+// Prints {path, id, cwd} of the session a codex, pi or grok process (kind, pid, cwd) writes.
+const AGENT_FIND = `
 import json, os, subprocess, sys, time
-# Which Codex rollout a process writes: the one it holds open, else by working folder and start time.
-pid, cwd = sys.argv[1], sys.argv[2]
-home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+# Which session a coding agent process (kind, pid, cwd) writes: the file it or a child holds
+# open, else the one for the same folder that started closest to the process.
+kind, pid, cwd = sys.argv[1], sys.argv[2], sys.argv[3]
+env = lambda k, d: os.environ.get(k) or os.path.expanduser(d)
+root = {"codex": env("CODEX_HOME", "~/.codex") + "/sessions",
+        "pi": env("PI_CODING_AGENT_DIR", "~/.pi/agent") + "/sessions",
+        "grok": env("GROK_HOME", "~/.grok") + "/sessions"}[kind]
 def run(*a):
     try: return subprocess.run(a, capture_output=True, text=True, timeout=5).stdout
     except Exception: return ""
+def iso(s):
+    try: return time.mktime(time.strptime((s or "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+    except Exception: return None
+def meta(path):
+    # {id, cwd, at} of a session: a codex/pi file, or a grok folder.
+    try:
+        if kind == "grok":
+            m = json.load(open(os.path.join(path, "summary.json")))
+            return {"id": m.get("id") or os.path.basename(path), "cwd": m.get("cwd"), "at": iso(m.get("created_at"))}
+        with open(path, encoding="utf-8", errors="replace") as f:
+            d = json.loads(f.readline())
+        if kind == "codex":
+            p = d.get("payload") or {}
+            return d.get("type") == "session_meta" and {"id": p.get("id"), "cwd": p.get("cwd"), "at": iso(p.get("timestamp"))}
+        return d.get("type") == "session" and {"id": d.get("id"), "cwd": d.get("cwd"), "at": iso(d.get("timestamp"))}
+    except Exception: return None
+def session_of(n):
+    # The session a path under root belongs to, if any.
+    base = os.path.basename(n)
+    if kind == "codex": return n if base.startswith("rollout-") and base.endswith(".jsonl") else None
+    if not n.startswith(root + "/"): return None
+    if kind == "grok":
+        parts = n[len(root) + 1:].split("/")
+        return os.path.join(root, parts[0], parts[1]) if len(parts) > 2 else None
+    return n if base.endswith(".jsonl") else None
+def out(path):
+    m = meta(path) or {}
+    print(json.dumps({"path": path, "id": m.get("id") or os.path.basename(path), "cwd": m.get("cwd") or cwd}))
+    sys.exit()
 pids, todo = [], [pid]
 while todo and len(pids) < 50:
     p = todo.pop(); pids.append(p); todo += run("pgrep", "-P", p).split()
-def meta(path):
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            d = json.loads(f.readline())
-        return d.get("payload") if d.get("type") == "session_meta" else None
-    except Exception: return None
-def out(path):
-    m = meta(path) or {}
-    print(json.dumps({"path": path, "id": m.get("id") or os.path.basename(path)[-41:-6], "cwd": m.get("cwd") or cwd}))
-    sys.exit()
 for line in run("lsof", "-Fn", "-p", ",".join(pids)).splitlines():
-    n = line[1:]
-    if line.startswith("n") and os.path.basename(n).startswith("rollout-") and n.endswith(".jsonl"): out(n)
-# Not held open: the rollout for this folder started closest after the process.
+    s = line.startswith("n") and session_of(line[1:])
+    if s: out(s)
 el = run("ps", "-o", "etime=", "-p", pid).strip()
 secs = 0
 if el:
@@ -87,48 +114,95 @@ if el:
     secs += int(d or 0) * 86400
 start = time.time() - secs
 best = None
-for root, _, files in os.walk(os.path.join(home, "sessions")):
-    for fn in files:
-        if not (fn.startswith("rollout-") and fn.endswith(".jsonl")): continue
-        path = os.path.join(root, fn)
+for dirpath, dirs, files in os.walk(root):
+    names = dirs if kind == "grok" else files
+    for fn in names:
+        path = os.path.join(dirpath, fn)
+        if session_of(path + ("/x" if kind == "grok" else "")) is None: continue
         try:
             if os.path.getmtime(path) < start - 60: continue
         except OSError: continue
         m = meta(path)
         if not m or m.get("cwd") != cwd: continue
-        try: t = time.mktime(time.strptime(m.get("timestamp", "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
-        except Exception: t = os.path.getctime(path)
-        gap = abs(t - start)
+        gap = abs((m.get("at") or os.path.getctime(path)) - start)
         if best is None or gap < best[0]: best = (gap, path)
 if best: out(best[1])
 `;
-// Prints the latest {used, size, model, effort, rate_limits, rl_at} of a Codex rollout.
-const CODEX_READ = `
+// Prints the latest context use, model, effort, cache and quota of a codex, pi or grok session.
+const AGENT_READ = `
 import json, os, sys
-# The latest context use, model and quota in a Codex rollout, read from its end.
-path = sys.argv[1]
-size = os.path.getsize(path)
-with open(path, "rb") as f:
-    f.seek(max(0, size - 3000000))
-    lines = f.read().decode("utf-8", "replace").splitlines()
+# The latest {used, size, model, effort, at, cache, rate_limits, rl_at} of a codex/pi/grok session.
+kind, path = sys.argv[1], sys.argv[2]
+def tail(p, n=3000000):
+    try:
+        size = os.path.getsize(p)
+        with open(p, "rb") as f:
+            f.seek(max(0, size - n))
+            return f.read().decode("utf-8", "replace").splitlines()
+    except OSError: return []
+def find(o, key):
+    # The first value of key anywhere inside o.
+    if isinstance(o, dict):
+        if key in o: return o[key]
+        o = list(o.values())
+    if isinstance(o, list):
+        for v in o:
+            r = find(v, key)
+            if r is not None: return r
+    return None
 res = {}
-for line in reversed(lines):
-    if '"token_count"' not in line and '"turn_context"' not in line: continue
-    try: d = json.loads(line)
-    except Exception: continue
-    p = d.get("payload") or {}
-    if p.get("type") == "token_count" or d.get("type") == "token_count":
-        info = p.get("info") or {}
-        if "used" not in res and info.get("last_token_usage"):
-            u = info["last_token_usage"]
-            res["used"] = u.get("total_tokens") or (u.get("input_tokens", 0) + u.get("output_tokens", 0))
-            res["size"] = info.get("model_context_window")
-            res["at"] = d.get("timestamp")
-        if "rate_limits" not in res and p.get("rate_limits"):
-            res["rate_limits"] = p["rate_limits"]; res["rl_at"] = d.get("timestamp")
-    elif d.get("type") == "turn_context" and "model" not in res:
-        res["model"] = p.get("model"); res["effort"] = p.get("effort")
-    if all(k in res for k in ("used", "rate_limits", "model")): break
+if kind == "codex":
+    for line in reversed(tail(path)):
+        if '"token_count"' not in line and '"turn_context"' not in line: continue
+        try: d = json.loads(line)
+        except Exception: continue
+        p = d.get("payload") or {}
+        if p.get("type") == "token_count":
+            info = p.get("info") or {}
+            if "used" not in res and info.get("last_token_usage"):
+                u = info["last_token_usage"]
+                res["used"] = u.get("total_tokens") or (u.get("input_tokens", 0) + u.get("output_tokens", 0))
+                res["size"] = info.get("model_context_window")
+                res["at"] = d.get("timestamp")
+            if "rate_limits" not in res and p.get("rate_limits"):
+                res["rate_limits"] = p["rate_limits"]; res["rl_at"] = d.get("timestamp")
+        elif d.get("type") == "turn_context" and "model" not in res:
+            res["model"] = p.get("model"); res["effort"] = p.get("effort")
+        if all(k in res for k in ("used", "rate_limits", "model")): break
+elif kind == "pi":
+    for line in reversed(tail(path)):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message") or {}
+        if d.get("type") == "message" and m.get("role") == "assistant" and m.get("usage") and "used" not in res:
+            u = m["usage"]
+            res["used"] = u.get("totalTokens") or sum(u.get(k) or 0 for k in ("input", "output", "cacheRead", "cacheWrite"))
+            res["model"] = m.get("model"); res["at"] = d.get("timestamp")
+            # Anthropic keeps a prompt cache 5 minutes after its last use.
+            if m.get("provider") == "anthropic" and (u.get("cacheRead") or u.get("cacheWrite")): res["cache"] = 300
+        elif d.get("type") == "thinking_level_change" and "effort" not in res:
+            res["effort"] = d.get("thinkingLevel")
+        if "used" in res and "effort" in res: break
+elif kind == "grok":
+    for line in reversed(tail(os.path.join(path, "updates.jsonl"))):
+        if "turn_completed" not in line: continue
+        try: d = json.loads(line)
+        except Exception: continue
+        if find(d, "sessionUpdate") != "turn_completed": continue
+        i, o = find(d, "inputTokens"), find(d, "outputTokens")
+        if i is None: continue
+        res["used"] = (i or 0) + (o or 0)
+        mu = find(d, "modelUsage")
+        if isinstance(mu, dict) and mu: res["model"] = list(mu)[-1]
+        break
+    try:
+        s = json.load(open(os.path.join(path, "summary.json")))
+        res["model"] = s.get("current_model_id") or res.get("model")
+    except Exception: pass
+    for line in reversed(tail(os.path.join(path, "chat_history.jsonl"), 500000)):
+        try: d = json.loads(line)
+        except Exception: continue
+        if d.get("type") == "assistant" and d.get("reasoning_effort"): res["effort"] = d["reasoning_effort"]; break
 print(json.dumps(res))
 `;
 // Codex quota windows, labelled by their length (300 min: 5h, 10080: 7d).
@@ -309,13 +383,15 @@ export default class Shepherd extends View {
           if (s && !this.short[s.sessionId]) this.nameSession(this.sess[addr]);
           if (s && !(s.cwd in this.repoOf)) this.findRepo(s.cwd, on);
         }
-        const isCodex = !isClaude && ((g.status?.app ?? "").startsWith("codex") || (g.foreground?.argv ?? []).some((a) => /(^|\/)codex(\.js)?$/.test(a)));
-        if (pid && isCodex && this.sess[addr]?.pid !== pid) {
-          const r = await exec("python3", ["-I", "-c", CODEX_FIND, String(pid), g.foreground?.cwd ?? g.cwd ?? ""], { on });
+        // Codex, pi and grok: their session file (or grok's folder), found once per process.
+        const app = g.status?.app ?? "", argv = g.foreground?.argv ?? [];
+        const kind = isClaude ? null : ["codex", "pi", "grok"].find((k) => app.startsWith(k) || argv.some((a) => new RegExp(`(^|/)${k}(\\.js)?$`).test(a)));
+        if (pid && kind && this.sess[addr]?.pid !== pid) {
+          const r = await exec("python3", ["-I", "-c", AGENT_FIND, kind, String(pid), g.foreground?.cwd ?? g.cwd ?? ""], { on });
           const f = JSON.parse(r.stdout.trim() || "null");
-          if (f) this.sess[addr] = { kind: "codex", pid, id: f.id, cwd: f.cwd, path: f.path, on };
+          if (f) this.sess[addr] = { kind, pid, id: f.id, cwd: f.cwd, path: f.path, on };
         }
-        const cs = isCodex && this.sess[addr];
+        const cs = kind && this.sess[addr];
         if (cs && !this.short[cs.id]) this.nameSession(cs);
         if (cs && !(cs.cwd in this.repoOf)) this.findRepo(cs.cwd, on);
       } catch {}
@@ -367,7 +443,7 @@ export default class Shepherd extends View {
     } catch {}
     // Codex: the newest rollout's last rate limits.
     try {
-      const r = await exec("sh", ["-c", 'f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -1); [ -n "$f" ] && python3 -I -c "$1" "$f"', "sh", CODEX_READ]);
+      const r = await exec("sh", ["-c", 'f=$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -1); [ -n "$f" ] && python3 -I -c "$1" codex "$f"', "sh", AGENT_READ]);
       const d = JSON.parse(r.stdout.trim() || "null");
       if (d?.rate_limits) this.setCodexQuota(d);
     } catch {}
@@ -385,12 +461,14 @@ export default class Shepherd extends View {
     const s = row?.addr && this.sess[row.addr];
     if (!s?.id) return;
     const out = { at: Date.now() };
-    if (s.kind === "codex") {
-      // Codex shows no prompt cache, so cache stays empty.
+    if (s.kind !== "claude") {
+      // Codex and grok keep no cache time; pi on Anthropic keeps 5 minutes. Without a known
+      // window size, ctx shows only the tokens used.
       try {
-        const r = await exec("python3", ["-I", "-c", CODEX_READ, s.path], { on: s.on });
+        const r = await exec("python3", ["-I", "-c", AGENT_READ, s.kind, s.path], { on: s.on });
         const d = JSON.parse(r.stdout.trim() || "null");
-        if (d?.used != null && d.size) Object.assign(out, { used: d.used, size: d.size, pct: (100 * d.used) / d.size });
+        if (d?.used != null) Object.assign(out, { used: d.used, size: d.size ?? null, pct: d.size ? (100 * d.used) / d.size : null });
+        if (d?.cache && d.at) out.cacheUntil = Date.parse(d.at) + d.cache * 1000;
         if (d) Object.assign(out, { model: d.model, effort: d.effort });
         if (d?.rate_limits) this.setCodexQuota(d);
       } catch {}
@@ -926,7 +1004,7 @@ export default class Shepherd extends View {
         .child(kv("model", this.cfg.model ?? "default"))
         .child(kv("effort", this.cfg.effort)))
       .child(h_flex().gap(px(28)).text_size(13)
-        .child(kv("ctx", ctx?.used != null ? `${tokens(ctx.used)} / ${tokens(ctx.size)}  ${Math.round(ctx.pct)}%` : "—", ctx?.pct != null ? pctColor(ctx.pct) : C.text))
+        .child(kv("ctx", ctx?.used != null ? (ctx.size ? `${tokens(ctx.used)} / ${tokens(ctx.size)}  ${Math.round(ctx.pct)}%` : tokens(ctx.used)) : "—", ctx?.pct != null ? pctColor(ctx.pct) : C.text))
         .child(kv("cache", left == null ? "—" : left > 60000 ? `noch ${Math.floor(left / 60000)}m` : left > 0 ? "noch <1m" : "abgelaufen", left > 0 ? C.done : C.blocked))
         .children((q?.windows ?? []).filter(([, w]) => w?.used_percentage != null).map(([k, w]) =>
           kv(k, `${Math.round(w.used_percentage)}%${w.resets_at ? `  ↻ ${clock(w.resets_at)}` : ""}`, pctColor(w.used_percentage))))

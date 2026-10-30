@@ -57,7 +57,9 @@ The info lines at the bottom show:
   (`noch Nm` = N minutes left, `abgelaufen` = expired). `5h` / `7d`: quota in percent with the
   reset time (`↻`). Green below 60 %, yellow from 60 %, red from 80 %.
   The quota shown is the `/who` agent's: Claude Code's from the statusline hook, Codex's from
-  its newest rollout. For a Codex row, `ctx` comes from its rollout and `cache` stays `—`.
+  its newest rollout. For a Codex, pi or grok row, `ctx` comes from its session file. pi and grok
+  don't store their window size, so `ctx` shows only the tokens used there. `cache` stays `—`,
+  except for pi on Anthropic (5 minutes). pi and grok show no quota.
 
 ### Controls
 
@@ -117,13 +119,14 @@ space itself) would close.
 
 When a Claude session gets its first real request (four words or more, not a command),
 `claude -p --model haiku` gives it a short 1–3 word name, e.g. `stand-abfragen`.
-Codex sessions get one the same way, from their rollout in `~/.codex/sessions`.
+Codex, pi and grok sessions get one the same way, from their session files in
+`~/.codex/sessions`, `~/.pi/agent/sessions` and `~/.grok/sessions`.
 In front of it goes a three-letter code for the agent's repo (from `origin`, else the git or
 working folder), e.g. `wbs-stand-abfragen` for `webshop`. Three or more words give their
 initials (`Customer-Portal-App` → `cpa`), two words the first letter and next consonant of
 the first plus the second's initial (`landing-page` → `lnp`), one word its first letter and next
 two consonants (`invoicing` → `inv`); names of up to three letters stay as they are.
-That name replaces the session or tab name in the list. This works with Claude Code and Codex.
+That name replaces the session or tab name in the list. This works with Claude Code, Codex, pi and grok.
 
 ### Refresh
 

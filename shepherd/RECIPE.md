@@ -37,7 +37,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
      - time since the last status change (4 CH, right-aligned, `12s`/`5m`/`2h`, agents only)
      - age of the terminal (5 CH, right-aligned)
      - the program (9 CH) in its color: `claude #ff9f43`, `codex #7dd3fc`, `gemini #8ab4f8`,
-       `opencode #c4b5fd`, `pi #f9a8d4`, `terminal #2ecc8f`, any other agent `#a6e3b8`
+       `opencode #c4b5fd`, `pi #f9a8d4`, `grok #e5e7eb`, `terminal #2ecc8f`, any other agent `#a6e3b8`
      - the title (the agent's status message, or the shell's foreground program), truncated
    - The selected row has a `#1b2140` background. A 5px `#232842` scroll thumb shows on the
      right once the rows overflow.
@@ -118,6 +118,20 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   `primary`/`secondary`, labelled by `window_minutes`, resets from `resets_at` or
   `resets_in_seconds`). Codex keeps no cache time, so `cache` shows `—`. The quota line also
   reads the newest rollout on every refresh.
+- **pi and grok** work the same way (one script, `AGENT_FIND`/`AGENT_READ`, takes the kind),
+  detected by status app or argv `pi`/`grok`:
+  - pi: `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/--<cwd with / as ->--/<time>_<id>.jsonl`,
+    header `{"type":"session","id","cwd","timestamp"}`. Name from the first `message` with
+    role `user`; `ctx` from the last assistant `usage.totalTokens`, model from its `model`,
+    effort from the last `thinking_level_change`; `cache` 5 minutes after the last answer when
+    its `provider` is `anthropic` and it used `cacheRead`/`cacheWrite`.
+  - grok: a session is the folder `${GROK_HOME:-~/.grok}/sessions/<url-encoded cwd>/<id>/`,
+    matched by `summary.json` (`id`, `cwd`, `created_at`, `current_model_id`). Name from the
+    first `chat_history.jsonl` `user` record without `synthetic_reason`; `ctx` from the last
+    `turn_completed` in `updates.jsonl` (`inputTokens` + `outputTokens`, found anywhere in the
+    record); effort from the last assistant's `reasoning_effort`.
+  - Neither stores its window size, so `ctx` shows only the tokens used, and neither has
+    quota.
 - **Refresh.** Terminal facts, sessions and quota refresh every 8s. The selected row's
   context and cache refresh every 3s and on every selection change.
 
@@ -148,7 +162,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   - `gh api user/repos …` and `gh repo clone`
   - `sh -c` to list folders and `~/dev` clones (on the `/machine`)
   - `test -e`
-  - `python3 -I -c` to read a transcript's first request, and to find and read Codex rollouts
+  - `python3 -I -c` to read a transcript's first request, and to find and read Codex, pi and grok sessions
     (with `pgrep`, `lsof`, `ps`)
   - `git remote get-url origin` / `git rev-parse --show-toplevel` for the repo code
   - `claude -p --model haiku …` for names
@@ -192,8 +206,10 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   - `~/dev` as the clone folder (`CLONE_DIR`)
   - the font `Geist Mono` installed
 - The quota line shows the `/who` agent. Gemini and others show no quota.
-- Session names and the context line work for Claude Code and Codex; `cache` only for Claude.
-- The Codex part was written against Codex's rollout format without a live Codex to try it on.
+- Session names and the context line work for Claude Code, Codex, pi and grok; `cache` for
+  Claude and for pi on Anthropic.
+- The Codex, pi and grok parts were written against their formats (pi from its docs, grok from
+  third-party descriptions) without a live install to try them on.
 - The `+N` column counts live terminals whose `parent` is the row's terminal.
 
 ## Done when
