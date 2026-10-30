@@ -10,9 +10,9 @@
 // row's unless named); each asks first, Enter says yes, Esc no.
 // /machine picks the computer /space works on (folders, clones and the space itself).
 
-import { View, div, image } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, run, hc, exec, readTextFile, home, knownAgents, props, openOverlay, closeOverlay, window, shared, setShared, nextCommand } from "herdr";
+import { appHome, spaces, machines, panes, agents, terminals, run, hc, exec, readTextFile, writeTextFile, home, knownAgents, props, openOverlay, closeOverlay, window, shared, setShared, nextCommand } from "herdr";
 
 // The picture's own colors, not the theme's: this layout is one fixed look.
 const C = {
@@ -140,6 +140,7 @@ for line in open(path, encoding="utf-8", errors="replace"):
     p = d.get("payload") or {}
     m = d.get("message") or {}
     if d.get("type") == "event_msg" and p.get("type") == "user_message": t = p.get("message") or ""
+    elif d.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user": t = text(p.get("content"))
     elif d.get("type") == "user" and "message" in d and not d.get("isMeta"): t = text(m.get("content"))
     elif d.get("type") == "user" and "content" in d and not d.get("synthetic_reason"): t = text(d.get("content"))
     elif d.get("type") == "message" and m.get("role") == "user": t = text(m.get("content"))
@@ -452,15 +453,48 @@ export default class Shepherd extends View {
     this.clones = {};   // owner/repo (lower case) → its folder under ~/dev
     this.mhome = home(); // home folder on /machine's computer
     this.msg = null;
-    cx.spawn(async (cx) => { await this.loadStatic(); await this.refresh(); await this.refreshSelected(); cx.notify(); });
+    cx.spawn(async (cx) => { await this.loadState(); await this.loadStatic(); await this.refresh(); await this.refreshSelected(); cx.notify(); });
     cx.timer.every(8000, (cx) => cx.spawn(async (cx) => { await this.refresh(); cx.notify(); }));
     cx.timer.every(3000, (cx) => cx.spawn(async (cx) => { this.adoptNewSpace(); await this.refreshSelected(); cx.notify(); }));
+  }
+
+  // Settings, stars, selection and short names live in one file: localStorage belongs to a
+  // single copy of the mod, and the window opens as a new copy on every resize or reload.
+  statePath() {
+    return `${appHome()}/data/shepherd/state.json`;
+  }
+
+  async loadState() {
+    try {
+      const text = await readTextFile(this.statePath());
+      if (!text) return;
+      const d = JSON.parse(text);
+      this.cfg = { ...this.cfg, ...d.cfg };
+      this.stars = d.stars ?? this.stars;
+      this.short = { ...this.short, ...d.short };
+      this.selKey = d.sel ?? this.selKey;
+      LANG = this.cfg.lang;
+      this.stored = text;
+    } catch {}
   }
 
   save() {
     localStorage.setItem("cfg", JSON.stringify(this.cfg));
     localStorage.setItem("stars", JSON.stringify(this.stars));
     if (this.selKey) localStorage.setItem("sel", this.selKey);
+    // Writes go one after another; a stale snapshot (another copy wrote) reads the file again.
+    this.writing = (this.writing ?? Promise.resolve()).then(async () => {
+      const text = JSON.stringify({ cfg: this.cfg, stars: this.stars, short: this.short, sel: this.selKey }, null, 1);
+      if (text === this.stored) return;
+      try {
+        if (this.stored === undefined) await exec("mkdir", ["-p", `${appHome()}/data/shepherd`]);
+        await writeTextFile(this.statePath(), text, this.stored ?? null);
+      } catch {
+        this.stored = await readTextFile(this.statePath());
+        await writeTextFile(this.statePath(), text, this.stored ?? null);
+      }
+      this.stored = text;
+    }).catch(() => {});
   }
 
   async loadStatic() {
@@ -558,7 +592,7 @@ export default class Shepherd extends View {
         .replace(/[^a-z0-9äöüß-]+/g, "-").split("-").filter(Boolean).slice(0, 3).join("-");
       if (n.code !== 0 || !name) return;
       this.short[s.id] = name;
-      localStorage.setItem("short", JSON.stringify(this.short));
+      this.save();
     } catch {} finally { this.naming.delete(s.id); }
   }
 
@@ -1216,7 +1250,13 @@ export default class Shepherd extends View {
         .child(kv("cache", left == null ? "—" : left > 60000 ? T().cacheLeft(Math.floor(left / 60000)) : left > 0 ? T().cacheLt1 : T().expired, left > 0 ? C.done : C.blocked))
         .children((q?.windows ?? []).filter(([, w]) => w?.used_percentage != null).map(([k, w]) =>
           kv(k, `${Math.round(w.used_percentage)}%${w.resets_at ? `  ↻ ${clock(w.resets_at)}` : ""}`, pctColor(w.used_percentage))))
-        .when(!q, (el) => el.child(kv("quota", T().noQuota(this.cfg.who), C.dim))));
+        .when(!q, (el) => el.child(kv("quota", T().noQuota(this.cfg.who), C.dim)))
+        // Herdr's settings, far right.
+        .child(div().flex_1())
+        .child(div().id("settings").flex_none().p(px(3)).rounded(4).cursor_pointer().text_color(C.dim)
+          .hover((st) => st.text_color(C.text).bg(C.sel))
+          .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); run("app.settings"); })
+          .child(svg("mods/shepherd/settings.svg").size(16))));
   }
 
   // Opens (or, with the same key, resizes) the window over this block.

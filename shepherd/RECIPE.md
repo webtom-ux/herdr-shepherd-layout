@@ -56,7 +56,9 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
      - `ctx` (used/size of the selected Claude session's context window, with a percentage)
        · `cache` (`Nm left`, `<1m left` or `expired`) · `5h` and `7d` quota percentages
        with reset times (`↻ 03:30`, or `↻ Sat 17:00` on another day). Percentages are green
-       below 60, `#f4e97a` from 60 and red from 80.
+       below 60, `#f4e97a` from 60 and red from 80. At the far right of this line sits a
+       16px gear (`mods/shepherd/settings.svg`, tinted `#6f7388`, `#ececf0` on `#1b2140` on
+       hover) that runs `app.settings`.
 
 ## How it behaves
 
@@ -125,7 +127,8 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   `codex`/`codex.js`. Its rollout is the `rollout-*.jsonl` the process or a child holds open
   (`lsof`), else the one under `${CODEX_HOME:-~/.codex}/sessions` with the same `cwd` in its
   `session_meta` that started closest to the process (`ps -o etime=`). It is looked up again
-  when the pid changes. From it come the first request (`event_msg`/`user_message`) for the
+  when the pid changes. From it come the first request (`event_msg`/`user_message`, or in newer Codex a
+  `response_item` message with role `user`) for the
   name, `ctx` (the last `token_count`'s `last_token_usage.total_tokens` of
   `model_context_window`), model and effort (`turn_context`) and quota (`rate_limits`
   `primary`/`secondary`, labelled by `window_minutes`, resets from `resets_at` or
@@ -153,7 +156,7 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 - `layouts/shepherd.json`: a root `column` (`#0c0f1e`, `"preview": "layouts/shepherd.svg"`)
   with one block, `{ "id": "shepherd", "content": { "mod": "shepherd" } }`.
 - `mods/shepherd/` contains `main.js`, `mod.json` (`{ "place": "none" }`) and
-  `shepherd.svg` (the pixel shepherd).
+  `shepherd.svg` (the pixel shepherd) and `settings.svg` (the gear).
 - **Host and window.** Without `props().overlay` the mod only paints the background and, on
   every `on_size_change`, opens itself in a frameless window over the block:
   `openOverlay({ mod: "shepherd", kind: "window", key: "shepherd-<w>x<h>+<top>", frame:
@@ -167,8 +170,12 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 - **herdr API.** `spaces`, `machines`, `panes`, `agents`, `terminals`, `knownAgents`, `home`,
   `readTextFile` (with `{ on }` for other machines), `exec` (with `{ on }` and `cwd`), `hc`,
   `run`, `openOverlay`, `closeOverlay`, `window`, `shared`, `setShared`, `props`,
-  `nextCommand`, `localStorage` (keys `sel`, `stars`, `short`, `cfg`). Commands: `tab.new`,
-  `tab.close`, `space.new`, `space.close`, `terminal.kill`, `pane.focus`. `hc get <addr>
+  `nextCommand`, `appHome`, `writeTextFile`. Commands: `tab.new`, `tab.close`, `space.new`,
+  `space.close`, `terminal.kill`, `pane.focus`, `app.settings`.
+- **State.** `cfg`, `stars`, `sel` and the short names (`short`, by session id) live in
+  `<appHome>/data/shepherd/state.json`, read before the first refresh and written on every
+  change (one write at a time, re-read on a stale snapshot). `localStorage` belongs to a
+  single copy of the mod, and the window opens as a new copy on every resize or reload. `hc get <addr>
   --json` supplies `created_ms`, `status_ms`, `foreground` and `status.msg`.
 - **Shipped mod used:** `peek`, in the peek dialog's 30px top block.
 - **Programs it runs:**

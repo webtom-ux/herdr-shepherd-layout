@@ -35,7 +35,7 @@ guide quotes the English texts.
 | --- | --- |
 | **Top** | The pixel shepherd and four counts: `agents` (all agents), `working`, `paused` (blocked, waiting for you) and `done`. Shells are not counted. |
 | **List** | A colored header per space with its terminal count, then one row per terminal. Starred rows (★) come first. |
-| **Bottom** | Messages, the command line, and two info lines about your settings and the selected row's context. |
+| **Bottom** | Messages, the command line, and two info lines about your settings and the selected row's context. A gear at the far right opens Herdr's settings. |
 
 Columns of a terminal row: number · status · name · `+N` (sub-terminals) · machine (`local` or its name) · time since the last status change · age of the terminal · program · title (the agent's status message, or a shell's foreground program).
 
@@ -76,7 +76,8 @@ The info lines at the bottom show:
 | `⌘↩` | Close the peek if open and put the cursor in the command line, for the selected row |
 | `Esc` | Cancel a pending confirmation, else close the peek (back in the list on that agent's row, so `↑`/`↓` go on from there), else clear the line |
 
-The selection and stars survive restarts.
+The selection, stars, settings and automatic names survive restarts (stored in
+`~/.config/herdr-app/data/shepherd/state.json`).
 
 ### Commands
 
