@@ -95,7 +95,7 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 | --- | --- | --- |
 | `/who <agent>` | Which coding agent to start (installed agents, otherwise `claude`/`codex`) | `/who codex` |
 | `/where <space>` | Which space new agents start in. `.` or `-` = the selected row's space | `/where webshop` |
-| `/model <model>` | Model for new agents, listed for the `/who` agent: Claude's from `~/.shepherdr/cli-models.json` (with id and default effort), Codex/pi/grok's from their config and recent sessions. Free text works too | `/model Opus 5.5` |
+| `/model <model>` | Model for new agents, listed for the `/who` agent: Claude's from `~/.shepherdr/cli-models.json` (with id and default effort), Codex/pi/grok's from their config and recent sessions. Free text works too, but not starting with `-` | `/model Opus 5.5` |
 | `/effort <level>` | Effort, listed for the agent and model: Claude per model (`low`…`max`), Codex `minimal`…`xhigh`, pi `off`…`xhigh`, grok `low`/`medium`/`high`. A model that doesn't take the current level resets it to its default | `/effort high` |
 | `/machine <computer>` | Computer for new spaces: `local` (this one) or a saved Herdr machine | `/machine mini` |
 
@@ -126,7 +126,7 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 
 | Command | Effect |
 | --- | --- |
-| `/yes` | Press `Enter` in the blocked agent, which takes the highlighted (usually approving) choice |
+| `/yes` | Press `Enter` in the blocked agent, which takes the highlighted (usually approving) choice. For several marked agents it first shows their questions and asks |
 | `/no` | Press `Esc` in it, which declines |
 | `/answer <text>` | Type the text into it although it is blocked |
 

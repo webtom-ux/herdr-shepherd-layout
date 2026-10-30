@@ -31,6 +31,8 @@ const COMMANDS = ["who", "where", "model", "effort", "new", "space", "close", "m
   "yes", "no", "answer", "rename", "find", "preview"];
 // /find words that pick rows by kind or status instead of by text.
 const PREVIEW_LINES = 8;
+// Model names and ids as they may go into a start command: no leading "-", no quotes.
+const SAFE_VALUE = /^[A-Za-z0-9][\w.:\/\[\]@+ -]{0,80}$/;
 const FIND_WORDS = ["working", "blocked", "done", "idle", "agents", "shells"];
 // Every UI text in English and German; /language picks one (English by default).
 const TEXT = {
@@ -58,7 +60,7 @@ const TEXT = {
     pickAgentOrNew: "Select an agent row first (or /new <task>)",
     pickRow: "Select a row first",
     noneDone: "No finished agents", noShells: "No shells",
-    nDone: (n) => `${n} finished agents`, nShells: (n) => `${n} shells`,
+    nDone: (n) => `${n} finished agents`, nShells: (n) => `${n} shells`, nMarked: (n) => `${n} marked rows`,
     askClose: (what) => `Close ${what}?`,
     busyOne: "Still working!", busyN: (n) => `${n} still working!`,
     alsoSpace: (names) => `Also closes space ${names}.`,
@@ -83,6 +85,9 @@ const TEXT = {
     noQuota: (w) => `no data for ${w}`,
     notBlocked: (n) => `${n} isn't waiting for an answer`,
     answered: (n, a) => `→ ${n}: ${a}`,
+    askAnswer: (a, qs) => `${a} for ${qs.length} agents: ${qs.join(" · ")} – go?`,
+    gaveNone: "None of them is waiting any more – nothing sent",
+    badValue: (v) => `Not allowed: ${v}`,
     renamed: (n) => `Renamed to ${n}`, autoName: "Automatic name again",
     filter: (f, n) => `filter “${f}” · ${n} shown · /find or Esc clears`,
     marked: (n) => `${n} marked`, taskForMarked: (n) => `Task for ${n} marked rows …`,
@@ -113,7 +118,7 @@ const TEXT = {
     pickAgentOrNew: "Erst eine Agent-Zeile wählen (oder /new <Auftrag>)",
     pickRow: "Erst eine Zeile wählen",
     noneDone: "Keine fertigen Agents", noShells: "Keine Shells",
-    nDone: (n) => `${n} fertige Agents`, nShells: (n) => `${n} Shells`,
+    nDone: (n) => `${n} fertige Agents`, nShells: (n) => `${n} Shells`, nMarked: (n) => `${n} markierte Zeilen`,
     askClose: (what) => `${what} schließen?`,
     busyOne: "Arbeitet noch!", busyN: (n) => `${n} arbeiten noch!`,
     alsoSpace: (names) => `Schließt auch Space ${names}.`,
@@ -138,6 +143,9 @@ const TEXT = {
     noQuota: (w) => `keine Daten für ${w}`,
     notBlocked: (n) => `${n} wartet auf keine Antwort`,
     answered: (n, a) => `→ ${n}: ${a}`,
+    askAnswer: (a, qs) => `${a} für ${qs.length} Agents: ${qs.join(" · ")} – los?`,
+    gaveNone: "Keiner wartet mehr – nichts gesendet",
+    badValue: (v) => `Nicht erlaubt: ${v}`,
     renamed: (n) => `Umbenannt in ${n}`, autoName: "Wieder automatischer Name",
     filter: (f, n) => `Filter „${f}“ · ${n} sichtbar · /find oder Esc hebt auf`,
     marked: (n) => `${n} markiert`, taskForMarked: (n) => `Auftrag an ${n} markierte Zeilen …`,
@@ -628,7 +636,9 @@ export default class Shepherd extends View {
         const pid = g.foreground?.pid;
         const isClaude = (g.status?.app ?? "").startsWith("claude") || (g.foreground?.argv?.[0] ?? "").endsWith("claude");
         if (pid && isClaude) {
-          const s = JSON.parse((await readTextFile(`${home()}/.claude/sessions/${pid}.json`, { on })) ?? "null");
+          const read = JSON.parse((await readTextFile(`${home()}/.claude/sessions/${pid}.json`, { on })) ?? "null");
+          // The id becomes part of a file name below, so only an id-shaped one is used.
+          const s = /^[A-Za-z0-9-]{1,80}$/.test(read?.sessionId ?? "") ? read : null;
           if (s) this.sess[addr] = { kind: "claude", name: s.name, id: s.sessionId, cwd: s.cwd, on };
           if (s && !this.short[s.sessionId]) this.nameSession(this.sess[addr]);
           if (s && !(s.cwd in this.repoOf)) this.findRepo(s.cwd, on);
@@ -912,14 +922,18 @@ export default class Shepherd extends View {
   }
 
   argvFor() {
-    const who = this.cfg.who;
-    const model = this.models.claude.find((m) => m.label === this.cfg.model || m.id === this.cfg.model);
-    if (who === "claude") return ["claude", ...(model ? ["--model", model.id] : this.cfg.model ? ["--model", this.cfg.model] : []), "--effort", this.cfg.effort];
-    if (who === "codex") return ["codex", ...(this.cfg.model ? ["-m", this.cfg.model] : []), "-c", `model_reasoning_effort="${this.cfg.effort}"`];
-    const run_ = this.agentsKnown.find((a) => a.key === who)?.run ?? [who];
+    // Values may come from state.json, so they are checked here again.
+    const known = this.agentsKnown.find((a) => a.key === this.cfg.who);
+    const who = ["claude", "codex"].includes(this.cfg.who) || known ? this.cfg.who : "claude";
+    const cfg = { model: SAFE_VALUE.test(this.cfg.model ?? "") ? this.cfg.model : null,
+      effort: /^[a-z]+$/.test(this.cfg.effort ?? "") ? this.cfg.effort : "medium" };
+    const model = this.models.claude.find((m) => m.label === cfg.model || m.id === cfg.model);
+    if (who === "claude") return ["claude", ...(model ? ["--model", model.id] : cfg.model ? ["--model", cfg.model] : []), "--effort", cfg.effort];
+    if (who === "codex") return ["codex", ...(cfg.model ? ["-m", cfg.model] : []), "-c", `model_reasoning_effort="${cfg.effort}"`];
+    const run_ = known?.run ?? [who];
     // pi: --model/--thinking (its README); grok: -m/--effort (xAI's CLI reference).
-    if (who === "pi") return [...run_, ...(this.cfg.model ? ["--model", this.cfg.model] : []), "--thinking", this.cfg.effort];
-    if (who === "grok") return [...run_, ...(this.cfg.model ? ["-m", this.cfg.model] : []), "--effort", this.cfg.effort];
+    if (who === "pi") return [...run_, ...(cfg.model ? ["--model", cfg.model] : []), "--thinking", cfg.effort];
+    if (who === "grok") return [...run_, ...(cfg.model ? ["-m", cfg.model] : []), "--effort", cfg.effort];
     return run_;
   }
 
@@ -1003,7 +1017,7 @@ export default class Shepherd extends View {
     const busy = list.filter((r) => r.agent && r.status === "working").length;
     // Closing a space's last tab closes the space too.
     const gone = [...new Set(list.map((r) => r.space))].filter((sp) => sp.tabs.every((t) => list.some((r) => r.tab === t.id)));
-    const what = list.length === 1 ? list[0].name : which === "shells" ? T().nShells(list.length) : T().nDone(list.length);
+    const what = list.length === 1 ? list[0].name : which === "shells" ? T().nShells(list.length) : which === "done" ? T().nDone(list.length) : T().nMarked(list.length);
     this.confirm = list;
     this.msg = {
       text: T().askClose(what) + (busy ? ` ${busy === 1 && list.length === 1 ? T().busyOne : T().busyN(busy)}` : "")
@@ -1141,7 +1155,10 @@ export default class Shepherd extends View {
     if (cmd === "effort") { const e = pick(this.efforts()); return e ? set("effort", e) : (this.msg = { text: `effort: ${this.efforts().join(" ")}` }); }
     if (cmd === "model") {
       const list = this.options("model");
-      set("model", (list.length && pick(list)) || arg);
+      const v = (list.length && pick(list)) || arg;
+      // The value goes into the agent's start command, where "-x" would be an option.
+      if (!SAFE_VALUE.test(v)) return (this.msg = { text: T().badValue(v) });
+      set("model", v);
       // An effort the new model doesn't take falls back to its default (or medium).
       const efforts = this.efforts();
       if (!efforts.includes(this.cfg.effort)) {
@@ -1153,7 +1170,8 @@ export default class Shepherd extends View {
       return;
     }
     if (cmd === "who") {
-      const v = pick(this.options("who")) ?? arg;
+      const v = pick(this.options("who"));
+      if (!v) return (this.msg = { text: T().badValue(arg) });
       set("who", v);
       if (v !== "claude") this.cfg.model = this.models[v]?.[0] ?? null;
       else if (!this.models.claude.some((m) => m.label === this.cfg.model)) this.cfg.model = "Opus 5.5";
@@ -1168,6 +1186,7 @@ export default class Shepherd extends View {
       const c = this.confirm;
       this.confirm = null;
       if (c.send) { for (const x of c.send) this.send(x, c.text, cx); return; }
+      if (c.answer) return this.answer(c.answer.keys, c.answer.label, cx, true);
       return this.closeRows(c);
     }
     this.confirm = null;
@@ -1195,15 +1214,25 @@ export default class Shepherd extends View {
   }
 
   // /yes and /no press Enter (the highlighted, usually approving, choice) or Esc in each
-  // blocked target; /answer types text there even though it's blocked.
-  answer(keys, label, cx) {
+  // blocked target; /answer types text there even though it's blocked. More than one target
+  // (except /no) is asked about first, with each agent's question, and every agent is checked
+  // again right before the keys go out, since its question may have changed since the refresh.
+  answer(keys, label, cx, confirmed) {
     const list = this.targets();
     if (!list.length) return (this.msg = { text: T().pickAgent });
     const blocked = list.filter((r) => r.agent && r.status === "blocked");
     if (!blocked.length) return (this.msg = { text: T().notBlocked(list[0].name) });
+    const shown = keys ? `/${label}` : label;
+    if (blocked.length > 1 && label !== "no" && !confirmed) {
+      this.confirm = { answer: { keys, label } };
+      this.msg = { text: `${T().askAnswer(shown, blocked.map((r) => `${r.name}: ${r.title || "?"}`))}  ${T().yesNo}`, color: C.blocked };
+      return;
+    }
     cx.spawn(async (cx) => {
-      for (const r of blocked) await hc(keys ? ["keys", r.addr, ...keys] : ["send", "--force", r.addr, "--", label]);
-      this.msg = { text: T().answered(blocked.length === 1 ? blocked[0].name : blocked.length, keys ? `/${label}` : label), ok: true };
+      const live = new Set(agents().filter((a) => a.status === "blocked").map((a) => a.address));
+      const still = blocked.filter((r) => live.has(r.addr));
+      for (const r of still) await hc(keys ? ["keys", r.addr, ...keys] : ["send", "--force", r.addr, "--", label]);
+      this.msg = still.length ? { text: T().answered(still.length === 1 ? still[0].name : still.length, shown), ok: true } : { text: T().gaveNone };
       cx.notify();
     });
   }

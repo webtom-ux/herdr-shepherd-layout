@@ -85,11 +85,14 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   what it gets: Enter on the empty line sends, Escape or typing cancels.
 - **Commands.** Each one autocompletes as you type. ↑/↓ pick a suggestion, Tab fills it in,
   and Enter applies it.
-  - `/who` sets the agent for new agents: installed agents, otherwise `claude`/`codex`.
+  - `/who` sets the agent for new agents: installed agents, otherwise `claude`/`codex`; other
+    names are refused. `argvFor` checks who, model and effort again, since `state.json` may
+    hold anything.
   - `/where` sets the target space by name; `.` or `-` means "the selected row's space".
   - `/model` lists the `/who` agent's models: Claude's from `~/.shepherdr/cli-models.json`
     (shown with id and default effort), Codex/pi/grok's from their config and the models
-    their latest sessions used (`MODELS_SEEN`, read once at start). Free text works too.
+    their latest sessions used (`MODELS_SEEN`, read once at start). Free text works too, if it
+    passes `SAFE_VALUE` (no leading `-`, no quotes), as it goes into the start command.
   - `/effort` lists the levels the agent takes: Claude's per model from cli-models.json,
     else `codex: minimal low medium high xhigh`, `pi: off minimal low medium high xhigh`,
     `grok: low medium high`. Picking a model or agent that doesn't take the current level
@@ -121,7 +124,9 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   shell in it asks first, as for one shell.
 - **Blocked agents.** `/yes` presses Enter (`hc keys <addr> enter`), which takes the highlighted,
   usually approving, choice; `/no` presses Esc; `/answer <text>` runs `hc send --force <addr> --
-  <text>`. Each acts only on targets whose status is `blocked`, and says so otherwise.
+  <text>`. Each acts only on targets whose status is `blocked`, and says so otherwise. `/yes`
+  and `/answer` for more than one target first show every agent's question and ask (Enter/Esc).
+  Right before the keys go out, `agents()` is read again and only still-blocked targets get them.
 - **Filter.** `/find <text>` keeps the rows whose name, title, program or space contains it
   (case-insensitive); `working`, `blocked`, `done`, `idle` pick by status and `agents`/`shells`
   by kind. Spaces without a match lose their header. A dim line above the command line reads

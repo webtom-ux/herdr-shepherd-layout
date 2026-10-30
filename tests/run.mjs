@@ -138,3 +138,9 @@ test("outputLines keeps only the agent's output", () => {
   assert.deepEqual(out(codex, 8), ["  Tests pass now."]);
   assert.deepEqual(out("a\nb\nc\n\n", 2), ["b", "c"]);
 });
+
+test("SAFE_VALUE lets model names through, not options or quotes", () => {
+  const safe = new Function(`${src.match(/const SAFE_VALUE = .*;/)[0]} return SAFE_VALUE;`)();
+  for (const ok of ["Opus 5.5", "claude-opus-5-5[1m]", "gpt-6.1-sol", "grok-4.5-build", "openrouter/x:free"]) assert.ok(safe.test(ok), ok);
+  for (const bad of ["--dangerously-skip-permissions", "-m", "", 'x"; y', "a\nb"]) assert.ok(!safe.test(bad), bad);
+});

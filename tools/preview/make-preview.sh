@@ -8,7 +8,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 src="$repo/shepherd"
 home=$(mktemp -d /tmp/shepherd-preview.XXXXXX)
-trap 'kill "$pid" 2>/dev/null || true; rm -rf "$home"' EXIT
+trap 'kill "${pid:-}" 2>/dev/null || true; rm -rf "$home"' EXIT
 
 mkdir -p "$home/layouts" "$home/mods/shepherd"
 cp "$src/layouts/shepherd.json" "$src/layouts/shepherd.svg" "$home/layouts/"
