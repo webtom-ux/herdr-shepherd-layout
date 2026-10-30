@@ -1,0 +1,4 @@
+{"timestamp": "2026-10-30T10:00:00Z", "type": "session_meta", "payload": {"id": "codex-old", "timestamp": "2026-10-30T10:00:00Z", "cwd": "/work/shop"}}
+{"timestamp": "2026-10-30T10:00:01Z", "type": "turn_context", "payload": {"model": "gpt-5-codex", "effort": "high"}}
+{"timestamp": "2026-10-30T10:00:01Z", "type": "event_msg", "payload": {"type": "user_message", "message": "Fix the flaky checkout test please"}}
+{"timestamp": "2026-10-30T10:00:09Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 25000, "output_tokens": 500, "total_tokens": 25500}, "model_context_window": 272000}, "rate_limits": {"primary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": 1793360000}, "secondary": {"used_percent": 40.0, "window_minutes": 10080, "resets_in_seconds": 200000}}}}

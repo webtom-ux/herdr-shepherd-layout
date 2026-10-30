@@ -114,15 +114,41 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
     space. The question names how many agents are still working, and whether the last tab of
     a space goes too. Enter confirms, Escape cancels, and typing anything also cancels.
 - **Escape**, in order: cancels a pending confirmation, else closes the peek (selecting its
-  row), else clears the line.
+  row), else clears the line, else the `/find` filter, else the marks.
+- **Marks.** ⌘-click toggles a row's mark, Shift+↑/↓ marks the rows it passes. A marked row has
+  a 4px `#ff5c8a` bar at its left edge. Text, `/close` (without a word), `/yes`, `/no` and
+  `/answer` go to every marked row instead of the selected one; text for a mark set with a
+  shell in it asks first, as for one shell.
+- **Blocked agents.** `/yes` presses Enter (`hc keys <addr> enter`), which takes the highlighted,
+  usually approving, choice; `/no` presses Esc; `/answer <text>` runs `hc send --force <addr> --
+  <text>`. Each acts only on targets whose status is `blocked`, and says so otherwise.
+- **Filter.** `/find <text>` keeps the rows whose name, title, program or space contains it
+  (case-insensitive); `working`, `blocked`, `done`, `idle` pick by status and `agents`/`shells`
+  by kind. Spaces without a match lose their header. A dim line above the command line reads
+  `filter “…” · N shown · /find or Esc clears`.
+- **Preview.** Under the list, above the footer border, the selected terminal's last 8 output
+  lines (`hc read <addr> --json`) in 12px `#6f7388`, 17px per line (unscaled, not `px()`),
+  read with every selection refresh. Only the output: the input box (the last `❯`/`›` prompt
+  line, from the rule above it) and everything under it, the spinner or "Worked for" line and
+  what follows it, right-aligned notices, rule lines and trailing blank lines are dropped. `/preview off` hides it (kept in `cfg.preview`).
+- **Cost.** Claude Code's from `cost.total_cost_usd` in the statusline cache, pi's as the sum
+  of every answer's `usage.cost.total`, grok's as the sum of `costUsdTicks` / 1e10; Codex has
+  none. The footer shows the selected session's (`$4.12`), and a fifth `cost` box (`#c4b5fd`)
+  under the counts adds up the rows shown when any is known. All boxes widen together by 14
+  (scaled) per character past two, so `$14.9` fits.
+- **Quota** follows the selected agent when its kind has quota (Claude Code, Codex), else the
+  `/who` agent.
+- **Starting pi and grok.** Their `run` from programs.json plus `--model <m> --thinking <effort>`
+  (pi) or `-m <m> --effort <effort>` (grok).
 - **Names.** Each Claude session's first real request (4+ words, not a command) is named by
   `claude -p --model haiku` into a 1–3 word kebab-case name, e.g. `stand-abfragen`, kept per
   session id. In front goes a three-letter code of the session's repo (`origin`'s name, else
   the git folder, else the working folder): initials of three or more words, the first letter
   and next consonant of the first word plus the second's initial for two, the first letter and
-  next two consonants for one; up to three letters stay as they are (`webshop` → `wbs`,
-  `landing-page` → `lnp`). The result, e.g. `wbs-stand-abfragen`, replaces the session or tab
-  name in the list.
+  next two consonants for one; up to three letters stay as they are (`invoicing` → `inv`,
+  `landing-page` → `lnp`). The result, e.g. `wbs-fix-login-bug`, replaces the session or tab
+  name in the list. A name from `/rename` (kept per session id, or per address for shells) comes
+  before all of that.
 - **Codex.** A row is Codex when its status app starts with `codex` or its foreground argv has
   `codex`/`codex.js`. Its rollout is the `rollout-*.jsonl` the process or a child holds open
   (`lsof`), else the one under `${CODEX_HOME:-~/.codex}/sessions` with the same `cwd` in its
@@ -175,8 +201,10 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 - **State.** `cfg`, `stars`, `sel` and the short names (`short`, by session id) live in
   `<appHome>/data/shepherd/state.json`, read before the first refresh and written on every
   change (one write at a time, re-read on a stale snapshot). `localStorage` belongs to a
-  single copy of the mod, and the window opens as a new copy on every resize or reload. `hc get <addr>
-  --json` supplies `created_ms`, `status_ms`, `foreground` and `status.msg`.
+  single copy of the mod, and the window opens as a new copy on every resize or reload. Names
+  from `/rename` are kept there too (`names`).
+- `hc get <addr> --json` supplies `created_ms`, `status_ms`, `foreground` and `status.msg`;
+  `hc read <addr> --json` the preview; `hc keys` and `hc send --force` the answers.
 - **Shipped mod used:** `peek`, in the peek dialog's 30px top block.
 - **Programs it runs:**
   - `gh api user/repos …` and `gh repo clone`
@@ -191,9 +219,15 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 - **Files it reads:**
   - `~/.claude/sessions/<pid>.json`
   - `~/.claude/projects/<cwd-slug>/<id>.jsonl`
-  - `~/.claude/statusline-cache/<id>.json`
+  - `~/.claude/statusline-cache/<id>.json` (with `cost`, written by the statusline hook)
   - `~/.claude/quota-cache.json`
   - `~/.shepherdr/cli-models.json` (`claude.models`/`claude.others`/`claude.default`)
+- **Tests:** `node --test tests/run.mjs` runs the embedded session readers and helpers on the
+  anonymous sessions in `tests/fixtures/` (Claude Code, Codex old and new, pi, grok).
+- **Preview image:** `tools/preview/make-preview.sh` starts a separate Herdr (its own
+  `HERDR_APP_HOME`) whose Shepherd gets made-up data from `tools/preview/demo-head.js` and
+  writes `shepherd/preview.png`, cut below the system title bar by `crop-top.swift` (sips only
+  crops around the centre). The screen must be unlocked.
 - **Art:** `shepherd.svg` is drawn on a 14px grid. `layouts/shepherd.svg` is a 320×200
   abstract preview for the settings screen.
 
@@ -248,5 +282,9 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
 - `/new <task>` opens a new tab in the `where` space running the chosen agent with that task.
 - A right click stars a row, which moves to the top of its space with `★`.
 - `/close done` asks first and closes only finished agents.
+- `/find blocked` shows only blocked agents; `/yes` on one presses Enter in it.
+- ⌘-click on two agents and text plus Enter reaches both.
+- The preview under the list follows the selection.
+- `node --test tests/run.mjs` passes.
 - After a Claude session's first real request, its row is renamed to a short kebab-case name
   within about 10s.

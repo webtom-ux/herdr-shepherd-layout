@@ -19,8 +19,9 @@ Requirements:
 - The **Geist Mono** font installed
 - `gh` logged in (for `/space gh:…`)
 - `python3` and `claude` on your PATH (for automatic names)
-- For `ctx`, `cache` and the quota display, a Claude Code statusline hook that writes
-  `~/.claude/statusline-cache/<session>.json` and `~/.claude/quota-cache.json`.
+- For `ctx`, `cache`, `cost` and the quota display, a Claude Code statusline hook that writes
+  `~/.claude/statusline-cache/<session>.json` (the statusline input's `context_window`,
+  `model`, `effort` and `cost`) and `~/.claude/quota-cache.json` (its `rate_limits`).
   Without it those fields show `—` or `no data for <agent>`.
 - Optional: `~/.shepherdr/cli-models.json` for the model list of `/model`
 
@@ -33,8 +34,9 @@ guide quotes the English texts.
 
 | Area | Contents |
 | --- | --- |
-| **Top** | The pixel shepherd and four counts: `agents` (all agents), `working`, `paused` (blocked, waiting for you) and `done`. Shells are not counted. |
+| **Top** | The pixel shepherd and four counts: `agents` (all agents), `working`, `paused` (blocked, waiting for you) and `done`. Shells are not counted. A fifth line adds up the `cost` of the sessions shown, where known. |
 | **List** | A colored header per space with its terminal count, then one row per terminal. Starred rows (★) come first. |
+| **Preview** | The last 8 output lines of the selected agent, live, without its input box and status lines (`/preview off` hides it). |
 | **Bottom** | Messages, the command line, and two info lines about your settings and the selected row's context. A gear at the far right opens Herdr's settings. |
 
 Columns of a terminal row: number · status · name · `+N` (sub-terminals) · machine (`local` or its name) · time since the last status change · age of the terminal · program · title (the agent's status message, or a shell's foreground program).
@@ -57,8 +59,9 @@ The info lines at the bottom show:
 - `ctx`: context used by the selected Claude session. `cache`: how long its prompt cache lasts
   (`Nm left`, `<1m left` or `expired`). `5h` / `7d`: quota in percent with the
   reset time (`↻`). Green below 60 %, yellow from 60 %, red from 80 %.
-  The quota shown is the `/who` agent's: Claude Code's from the statusline hook, Codex's from
-  its newest rollout. For a Codex, pi or grok row, `ctx` comes from its session file. pi and grok
+  The quota shown is the selected agent's (Claude Code's from the statusline hook, Codex's
+  from its newest rollout), else the `/who` agent's. `cost` is the selected session's cost:
+  Claude Code's from the statusline hook, pi's and grok's from their sessions (Codex has none). For a Codex, pi or grok row, `ctx` comes from its session file. pi and grok
   don't store their window size, so `ctx` shows only the tokens used there. `cache` stays `—`,
   except for pi on Anthropic (5 minutes). pi and grok show no quota.
 
@@ -71,10 +74,11 @@ The info lines at the bottom show:
 | Click | Select a row; clicking a header selects that space's first terminal |
 | Double click, or `Enter` on an empty line | **Peek**: the agent's live terminal opens over the list and keeps the keyboard while open |
 | Right click | Star / unstar the row (★) |
+| `⌘`-click, or `Shift`+`↑`/`↓` | Mark rows (a pink bar on the left). Text, `/close`, `/yes`, `/no` and `/answer` then go to all marked rows |
 | Text + `Enter` | Send the text to the selected agent (shows `→ <name>`). For a shell row it asks first, since the shell runs it as a command: `Enter` = send, `Esc` = cancel |
 | `⌘⌫` on an empty line | Close the selected row (asks first) |
 | `⌘↩` | Close the peek if open and put the cursor in the command line, for the selected row |
-| `Esc` | Cancel a pending confirmation, else close the peek (back in the list on that agent's row, so `↑`/`↓` go on from there), else clear the line |
+| `Esc` | Cancel a pending confirmation, else close the peek (back in the list on that agent's row, so `↑`/`↓` go on from there), else clear the line, else the `/find` filter, else the marks |
 
 The selection, stars, settings and automatic names survive restarts (stored in
 `~/.config/herdr-app/data/shepherd/state.json`).
@@ -90,7 +94,7 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 | Command | Effect | Example |
 | --- | --- | --- |
 | `/who <agent>` | Which coding agent to start (installed agents, otherwise `claude`/`codex`) | `/who codex` |
-| `/where <space>` | Which space new agents start in. `.` or `-` = the selected row's space | `/where invoicing` |
+| `/where <space>` | Which space new agents start in. `.` or `-` = the selected row's space | `/where webshop` |
 | `/model <model>` | Model for new agents, listed for the `/who` agent: Claude's from `~/.shepherdr/cli-models.json` (with id and default effort), Codex/pi/grok's from their config and recent sessions. Free text works too | `/model Opus 5.5` |
 | `/effort <level>` | Effort, listed for the agent and model: Claude per model (`low`…`max`), Codex `minimal`…`xhigh`, pi `off`…`xhigh`, grok `low`/`medium`/`high`. A model that doesn't take the current level resets it to its default | `/effort high` |
 | `/machine <computer>` | Computer for new spaces: `local` (this one) or a saved Herdr machine | `/machine mini` |
@@ -114,6 +118,20 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 | `/close shells` | Close all shells |
 | `/close space [name]` | Close a whole space with all its agents and shells (without a name: the selected one) |
 
+| `/find <text>` | Show only rows whose name, task, program or space contains the text; `working`, `blocked`, `done`, `idle`, `agents` or `shells` filter by those. `/find` alone or `Esc` shows all again |
+| `/rename <name>` | Own name for the selected row; `/rename` alone goes back to the automatic name |
+| `/preview on\|off` | Show or hide the live preview |
+
+#### Answering blocked agents
+
+| Command | Effect |
+| --- | --- |
+| `/yes` | Press `Enter` in the blocked agent, which takes the highlighted (usually approving) choice |
+| `/no` | Press `Esc` in it, which declines |
+| `/answer <text>` | Type the text into it although it is blocked |
+
+They act on the marked rows, else the selected one, and only on agents that are blocked (red `‖`).
+
 `/close` always asks first: `Enter` = yes, `Esc` = no, and typing anything else or moving to
 another row also cancels.
 The question warns when agents are still working, or when the last tab of a space (and so the
@@ -126,16 +144,25 @@ When a Claude session gets its first real request (four words or more, not a com
 Codex, pi and grok sessions get one the same way, from their session files in
 `~/.codex/sessions`, `~/.pi/agent/sessions` and `~/.grok/sessions`.
 In front of it goes a three-letter code for the agent's repo (from `origin`, else the git or
-working folder), e.g. `wbs-stand-abfragen` for `webshop`. Three or more words give their
+working folder), e.g. `wbs-fix-login-bug` for `webshop`. Three or more words give their
 initials (`Customer-Portal-App` → `cpa`), two words the first letter and next consonant of
 the first plus the second's initial (`landing-page` → `lnp`), one word its first letter and next
 two consonants (`invoicing` → `inv`); names of up to three letters stay as they are.
+`/rename <name>` gives a row a name of your own instead (`/rename` alone goes back).
 That name replaces the session or tab name in the list. This works with Claude Code, Codex, pi and grok.
 
 ### Refresh
 
 Terminals, sessions and quota refresh every 8 seconds. The selected row's context and cache
 refresh every 3 seconds and whenever the selection changes.
+
+## Development
+
+- `node --test tests/run.mjs` checks the session readers against anonymous sample sessions
+  of every supported agent in `tests/fixtures/` (Node 20+, `python3` and `lsof` needed).
+- `tools/preview/make-preview.sh` renders `shepherd/preview.png` from made-up data in a
+  separate Herdr instance, so no real names end up in the picture. Run it with the screen
+  unlocked.
 
 ## License
 

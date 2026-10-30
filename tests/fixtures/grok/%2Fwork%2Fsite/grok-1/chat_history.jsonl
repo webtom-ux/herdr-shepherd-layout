@@ -1,0 +1,4 @@
+{"type": "system", "content": "system prompt"}
+{"type": "user", "content": "project instructions are long here", "synthetic_reason": "project_instructions"}
+{"type": "user", "content": "Write tests for the contact form please", "prompt_index": 0}
+{"type": "assistant", "content": "ok", "model_id": "grok-4.5-build", "reasoning_effort": "medium", "tool_calls": []}

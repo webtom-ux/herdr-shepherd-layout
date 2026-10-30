@@ -1,0 +1,5 @@
+{"type": "session", "version": 3, "id": "pi-1", "timestamp": "2026-10-30T10:00:00.000Z", "cwd": "/work/site"}
+{"type": "message", "id": "a1", "timestamp": "2026-10-30T10:00:01.000Z", "message": {"role": "user", "content": [{"type": "text", "text": "Make the gallery on the start page responsive"}]}}
+{"type": "thinking_level_change", "id": "a2", "timestamp": "2026-10-30T10:00:02.000Z", "thinkingLevel": "high"}
+{"type": "message", "id": "a3", "timestamp": "2026-10-30T10:00:05.000Z", "message": {"role": "assistant", "provider": "anthropic", "model": "claude-sonnet-4-5", "usage": {"input": 1000, "output": 200, "cacheRead": 30000, "cacheWrite": 1000, "totalTokens": 32200, "cost": {"total": 0.02}}}}
+{"type": "message", "id": "a4", "timestamp": "2026-10-30T10:01:05.000Z", "message": {"role": "assistant", "provider": "anthropic", "model": "claude-sonnet-4-5", "usage": {"input": 1200, "output": 300, "cacheRead": 40000, "cacheWrite": 2000, "totalTokens": 43500, "cost": {"total": 0.03}}}}

@@ -21,12 +21,17 @@ const C = {
   // Status colors: the same as the counts on top.
   star: "#f4e97a", done: "#19d27c", working: "#f3ef8e", blocked: "#f0315c", shell: "#ff4d6d",
   terminal: "#2ecc8f", plus: "#a6e3b8", age: "#e0e0e6",
-  box: { agents: "#f4f4f4", working: "#f3ef8e", paused: "#f0315c", done: "#19d27c" },
+  box: { agents: "#f4f4f4", working: "#f3ef8e", paused: "#f0315c", done: "#19d27c", cost: "#c4b5fd" },
+  mark: "#ff5c8a",
 };
 const SPACE_COLORS = ["#ff5c8a", "#c4b5fd", "#cfc8ff", "#f0f0f4", "#34d399", "#7dd3fc", "#fbbf24", "#f9a8d4"];
 const PROGRAM_COLORS = { claude: "#ff9f43", codex: "#7dd3fc", gemini: "#8ab4f8", opencode: "#c4b5fd", pi: "#f9a8d4", grok: "#e5e7eb" };
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-const COMMANDS = ["who", "where", "model", "effort", "new", "space", "close", "machine", "language", "star"];
+const COMMANDS = ["who", "where", "model", "effort", "new", "space", "close", "machine", "language", "star",
+  "yes", "no", "answer", "rename", "find", "preview"];
+// /find words that pick rows by kind or status instead of by text.
+const PREVIEW_LINES = 8;
+const FIND_WORDS = ["working", "blocked", "done", "idle", "agents", "shells"];
 // Every UI text in English and German; /language picks one (English by default).
 const TEXT = {
   en: {
@@ -35,6 +40,9 @@ const TEXT = {
       effort: "effort for new agents", new: "start a new agent with a task",
       space: "new space: <folder> | gh:<repo> [name]", close: "close: selected | done | shells | space",
       machine: "computer for new spaces", language: "language: en | de", star: "star the selected row",
+      yes: "approve what a blocked agent asks", no: "decline what a blocked agent asks",
+      answer: "type an answer to a blocked agent", rename: "own name for the row (empty: automatic)",
+      find: "show only matching rows (empty: all)", preview: "live preview below the list: on | off",
     },
     days: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     local: "local", selected: "selected", current: "current", selectedSpace: "selected space",
@@ -73,6 +81,13 @@ const TEXT = {
     clickToType: "Click to type",
     cacheLeft: (m) => `${m}m left`, cacheLt1: "<1m left", expired: "expired",
     noQuota: (w) => `no data for ${w}`,
+    notBlocked: (n) => `${n} isn't waiting for an answer`,
+    answered: (n, a) => `→ ${n}: ${a}`,
+    renamed: (n) => `Renamed to ${n}`, autoName: "Automatic name again",
+    filter: (f, n) => `filter “${f}” · ${n} shown · /find or Esc clears`,
+    marked: (n) => `${n} marked`, taskForMarked: (n) => `Task for ${n} marked rows …`,
+    previewOn: "Preview on", previewOff: "Preview off",
+    cost: "cost",
   },
   de: {
     cmd: {
@@ -80,6 +95,9 @@ const TEXT = {
       effort: "Aufwand für neue Agents", new: "neuen Agent mit Auftrag starten",
       space: "neuen Space anlegen: <Ordner> | gh:<Repo> [Name]", close: "schließen: selected | done | shells | space",
       machine: "Computer für neue Spaces", language: "Sprache: en | de", star: "gewählte Zeile markieren",
+      yes: "Frage eines blockierten Agents bestätigen", no: "Frage eines blockierten Agents ablehnen",
+      answer: "Antwort an einen blockierten Agent tippen", rename: "eigener Name für die Zeile (leer: automatisch)",
+      find: "nur passende Zeilen zeigen (leer: alle)", preview: "Live-Vorschau unter der Liste: on | off",
     },
     days: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
     local: "lokal", selected: "gewählt", current: "aktuell", selectedSpace: "gewählter Space",
@@ -118,6 +136,13 @@ const TEXT = {
     clickToType: "Klicken zum Tippen",
     cacheLeft: (m) => `noch ${m}m`, cacheLt1: "noch <1m", expired: "abgelaufen",
     noQuota: (w) => `keine Daten für ${w}`,
+    notBlocked: (n) => `${n} wartet auf keine Antwort`,
+    answered: (n, a) => `→ ${n}: ${a}`,
+    renamed: (n) => `Umbenannt in ${n}`, autoName: "Wieder automatischer Name",
+    filter: (f, n) => `Filter „${f}“ · ${n} sichtbar · /find oder Esc hebt auf`,
+    marked: (n) => `${n} markiert`, taskForMarked: (n) => `Auftrag an ${n} markierte Zeilen …`,
+    previewOn: "Vorschau an", previewOff: "Vorschau aus",
+    cost: "Kosten",
   },
 };
 let LANG = "en";
@@ -177,8 +202,10 @@ def meta(path):
             return d.get("type") == "session_meta" and {"id": p.get("id"), "cwd": p.get("cwd"), "at": iso(p.get("timestamp"))}
         return d.get("type") == "session" and {"id": d.get("id"), "cwd": d.get("cwd"), "at": iso(d.get("timestamp"))}
     except Exception: return None
+real_root = os.path.realpath(root)
 def session_of(n):
-    # The session a path under root belongs to, if any.
+    # The session a path under root belongs to, if any; lsof reports resolved paths.
+    if n.startswith(real_root + "/") and real_root != root: n = root + n[len(real_root):]
     base = os.path.basename(n)
     if kind == "codex": return n if base.startswith("rollout-") and base.endswith(".jsonl") else None
     if not n.startswith(root + "/"): return None
@@ -240,6 +267,17 @@ def find(o, key):
             r = find(v, key)
             if r is not None: return r
     return None
+def sum_pi_cost(p):
+    # Every answer's cost.total in a pi session, in dollars.
+    total = 0.0
+    try:
+        for line in open(p, encoding="utf-8", errors="replace"):
+            if '"cost"' not in line: continue
+            try: m = json.loads(line).get("message") or {}
+            except Exception: continue
+            total += float(((m.get("usage") or {}).get("cost") or {}).get("total") or 0)
+    except OSError: pass
+    return round(total, 4)
 res = {}
 if kind == "codex":
     for line in reversed(tail(path)):
@@ -267,6 +305,7 @@ elif kind == "pi":
         if d.get("type") == "message" and m.get("role") == "assistant" and m.get("usage") and "used" not in res:
             u = m["usage"]
             res["used"] = u.get("totalTokens") or sum(u.get(k) or 0 for k in ("input", "output", "cacheRead", "cacheWrite"))
+            res["cost"] = sum_pi_cost(path)
             res["model"] = m.get("model"); res["at"] = d.get("timestamp")
             # Anthropic keeps a prompt cache 5 minutes after its last use.
             if m.get("provider") == "anthropic" and (u.get("cacheRead") or u.get("cacheWrite")): res["cache"] = 300
@@ -274,6 +313,12 @@ elif kind == "pi":
             res["effort"] = d.get("thinkingLevel")
         if "used" in res and "effort" in res: break
 elif kind == "grok":
+    ticks = 0
+    for line in tail(os.path.join(path, "updates.jsonl"), 20000000):
+        if "turn_completed" not in line or "costUsdTicks" not in line: continue
+        try: ticks += find(json.loads(line), "costUsdTicks") or 0
+        except Exception: pass
+    if ticks: res["cost"] = round(ticks / 1e10, 4)
     for line in reversed(tail(os.path.join(path, "updates.jsonl"))):
         if "turn_completed" not in line: continue
         try: d = json.loads(line)
@@ -296,6 +341,27 @@ elif kind == "grok":
 print(json.dumps(res))
 `;
 // Codex quota windows, labelled by their length (300 min: 5h, 10080: 7d).
+// Only an agent's output from its screen: drops the input box with everything under it
+// (model, mode, hints), the spinner or "Worked for" line and what sits between it and the box,
+// right-aligned notices and rule lines.
+function outputLines(text, n) {
+  let lines = text.split("\n").map((l) => l.replace(/\s+$/, ""));
+  const rule = (l) => /^\s*[─━═]{8,}\s*$/.test(l);
+  const prompt = (l) => /^\s*[❯›>]( | |$)/.test(l);
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 12); i--) {
+    if (!prompt(lines[i])) continue;
+    lines = lines.slice(0, i > 0 && rule(lines[i - 1]) ? i - 1 : i);
+    break;
+  }
+  const spinner = (l) => /^[^\w\s]\s+\S+(…|\.\.\.| for \d)/u.test(l) || /^\s*(─ )?Worked for \d|^\s*•\s+Working\b/.test(l);
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 8); i--) {
+    if (spinner(lines[i])) { lines = lines.slice(0, i); break; }
+  }
+  lines = lines.filter((l) => !rule(l) && !/^\s{20,}\S/.test(l));
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines.slice(-n);
+}
+
 function codexWindows(rl, at) {
   const label = (x, d) => (!x?.window_minutes ? d : x.window_minutes % 1440 === 0 ? `${x.window_minutes / 1440}d` : `${Math.round(x.window_minutes / 60)}h`);
   const w = (x) => x && { used_percentage: x.used_percent, resets_at: x.resets_at ?? (x.resets_in_seconds != null ? (Date.parse(at) || Date.now()) / 1000 + x.resets_in_seconds : null) };
@@ -382,6 +448,7 @@ function ago(ms) {
   const m = Math.floor(s / 60);
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
 }
+const money = (d) => (d >= 100 ? `$${Math.round(d)}` : d >= 10 ? `$${d.toFixed(1)}` : `$${d.toFixed(2)}`);
 const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : `${Math.round(n / 1000)}k`);
 function clock(sec) {
   const d = new Date(sec * 1000), now = new Date();
@@ -431,7 +498,7 @@ export default class Shepherd extends View {
         if (c !== "escape") continue;
         if (this.confirm) { this.confirm = null; this.msg = null; }
         else if (this.peeked && this.peekOpen()) { this.closePeek(); await cx.sleep(80); this.input.focus(); }
-        else { this.input.set_value(""); this.text = ""; this.msg = null; }
+        else this.escape();
         cx.notify();
       }
     });
@@ -440,8 +507,13 @@ export default class Shepherd extends View {
     this.stars = JSON.parse(localStorage.getItem("stars") ?? "[]");
     this.short = JSON.parse(localStorage.getItem("short") ?? "{}"); // session id → short name
     this.naming = new Set(); // session ids being named
+    this.names = {};         // session id (or address, for shells) → a name from /rename
+    this.marks = new Set();  // addresses marked with ⌘-click or shift+↑/↓
+    this.filter = "";        // /find text
+    this.cost = {};          // address → session cost in dollars
+    this.screen = {};        // address → last lines of its screen, for the preview
     this.repoOf = {};        // session cwd → its repo's name (origin, else the repo folder, else the folder)
-    this.cfg = { who: "claude", where: null, model: null, effort: "medium", lang: "en", ...JSON.parse(localStorage.getItem("cfg") ?? "{}") };
+    this.cfg = { who: "claude", where: null, model: null, effort: "medium", lang: "en", preview: true, ...JSON.parse(localStorage.getItem("cfg") ?? "{}") };
     LANG = this.cfg.lang;
     this.info = {};     // address → hc get facts
     this.sess = {};     // address → Claude Code session (name, id, cwd)
@@ -472,6 +544,7 @@ export default class Shepherd extends View {
       this.cfg = { ...this.cfg, ...d.cfg };
       this.stars = d.stars ?? this.stars;
       this.short = { ...this.short, ...d.short };
+      this.names = { ...this.names, ...d.names };
       this.selKey = d.sel ?? this.selKey;
       LANG = this.cfg.lang;
       this.stored = text;
@@ -484,7 +557,7 @@ export default class Shepherd extends View {
     if (this.selKey) localStorage.setItem("sel", this.selKey);
     // Writes go one after another; a stale snapshot (another copy wrote) reads the file again.
     this.writing = (this.writing ?? Promise.resolve()).then(async () => {
-      const text = JSON.stringify({ cfg: this.cfg, stars: this.stars, short: this.short, sel: this.selKey }, null, 1);
+      const text = JSON.stringify({ cfg: this.cfg, stars: this.stars, short: this.short, names: this.names, sel: this.selKey }, null, 1);
       if (text === this.stored) return;
       try {
         if (this.stored === undefined) await exec("mkdir", ["-p", `${appHome()}/data/shepherd`]);
@@ -573,7 +646,26 @@ export default class Shepherd extends View {
         if (cs && !(cs.cwd in this.repoOf)) this.findRepo(cs.cwd, on);
       } catch {}
     }
+    await this.loadCosts();
     await this.loadQuota();
+  }
+
+  // Each session's cost: Claude's from the statusline cache, pi's and grok's from their
+  // sessions (Codex has none). Kept per address for the rows, the footer and the total.
+  async loadCosts() {
+    for (const [addr, s] of Object.entries(this.sess)) {
+      try {
+        if (s.kind === "claude") {
+          const line = JSON.parse((await readTextFile(`${home()}/.claude/statusline-cache/${s.id}.json`, { on: s.on })) ?? "null");
+          const c = line?.cost?.total_cost_usd;
+          if (c != null) this.cost[addr] = c;
+        } else if (s.kind === "pi" || s.kind === "grok") {
+          const r = await exec("python3", ["-I", "-c", AGENT_READ, s.kind, s.path], { on: s.on });
+          const d = JSON.parse(r.stdout.trim() || "null");
+          if (d?.cost != null) this.cost[addr] = d.cost;
+        }
+      } catch {}
+    }
   }
 
   // The first real request (FIRST_ASK), named by NAMER;
@@ -635,6 +727,7 @@ export default class Shepherd extends View {
   // Context window and prompt cache of the selected row's session.
   async refreshSelected() {
     const row = this.rows && this.selected();
+    if (row?.kind === "term" && this.cfg.preview) await this.loadScreen(row.addr);
     const s = row?.addr && this.sess[row.addr];
     if (!s?.id) return;
     const out = { at: Date.now() };
@@ -693,6 +786,14 @@ export default class Shepherd extends View {
     this.ctx[row.addr] = out;
   }
 
+  // The last output lines of a terminal's screen, for the preview.
+  async loadScreen(addr) {
+    try {
+      const r = await hc(["read", addr, "--json"]);
+      this.screen[addr] = outputLines(JSON.parse(r.stdout).text ?? "", PREVIEW_LINES);
+    } catch {}
+  }
+
   // Header and terminal rows, space by space; starred rows first, then by number.
   buildRows() {
     const all = panes();
@@ -706,7 +807,8 @@ export default class Shepherd extends View {
         const tab = tabIds.get(p.tab);
         const agent = Boolean(p.program?.agent || p.status);
         const fg = g.foreground?.argv?.[0]?.split("/").pop();
-        const name = agent
+        const own = this.names[this.sess[p.terminal]?.id ?? p.terminal];
+        const name = own ? (agent ? own : `$ ${own}`) : agent
           ? this.shortName(this.sess[p.terminal]) || this.sess[p.terminal]?.name || (tab.named ? tab.name : null) || g.name || clean(p.title) || p.program?.name
           : `$ ${tab.named ? tab.name : g.name || `term-${num(p.terminal)}`}`;
         return {
@@ -719,14 +821,42 @@ export default class Shepherd extends View {
           program: agent ? programKey(p.program) ?? "agent" : "terminal",
           title: agent ? clean(g.status?.msg || g.title || p.title) : fg || clean(p.title),
           star: this.stars.includes(p.terminal),
+          mark: this.marks.has(p.terminal),
         };
-      });
+      }).filter((r) => this.matches(r));
       mine.sort((a, b) => (b.star - a.star) || (Number(num(a.addr)) - Number(num(b.addr))));
       const label = sp.machine ? `${sp.machine}/${sp.name}` : sp.name;
+      if (this.filter && !mine.length) return;
       rows.push({ key: `space:${sp.id}`, kind: "space", space: sp, label, count: mine.length, color: SPACE_COLORS[i % SPACE_COLORS.length] });
       rows.push(...mine);
     });
     return rows;
+  }
+
+  // /find: a status or kind word picks by that, other text by name, title, program or space.
+  matches(r) {
+    const f = this.filter.toLowerCase();
+    if (!f) return true;
+    if (f === "agents") return r.agent;
+    if (f === "shells") return !r.agent;
+    if (FIND_WORDS.includes(f)) return r.status === f;
+    return [r.name, r.title, r.program, r.space.name].some((x) => (x ?? "").toLowerCase().includes(f));
+  }
+
+  // The rows an action is for: the marked ones, else the selected one.
+  targets() {
+    const marked = this.rows.filter((r) => r.kind === "term" && this.marks.has(r.addr));
+    if (marked.length) return marked;
+    const r = this.selected();
+    return r?.kind === "term" ? [r] : [];
+  }
+
+  // Esc without a question or open agent: clear the line, else the filter, else the marks.
+  escape() {
+    if (this.text) { this.input.set_value(""); this.text = ""; }
+    else if (this.filter) this.filter = "";
+    else this.marks.clear();
+    this.msg = null;
   }
 
   selected() {
@@ -742,13 +872,15 @@ export default class Shepherd extends View {
     this.msg = null;
   }
 
-  move(by, cx) {
+  move(by, cx, mark = false) {
     this.dropConfirm();
+    if (mark && this.selected()) this.marks.add(this.selected().addr);
     const terms = this.rows.filter((r) => r.kind === "term");
     if (!terms.length) return;
     const i = Math.max(0, terms.findIndex((r) => r.key === this.selected()?.key));
     const next = terms[Math.min(terms.length - 1, Math.max(0, i + by))];
     this.selKey = next.key;
+    if (mark) { this.marks.add(next.addr); this.msg = { text: T().marked(this.marks.size), color: C.dim }; }
     const j = this.rows.indexOf(next);
     // At the top of a space, show its header too.
     this.reveal(this.rows[j - 1]?.kind === "space" ? j - 1 : j);
@@ -784,7 +916,11 @@ export default class Shepherd extends View {
     const model = this.models.claude.find((m) => m.label === this.cfg.model || m.id === this.cfg.model);
     if (who === "claude") return ["claude", ...(model ? ["--model", model.id] : this.cfg.model ? ["--model", this.cfg.model] : []), "--effort", this.cfg.effort];
     if (who === "codex") return ["codex", ...(this.cfg.model ? ["-m", this.cfg.model] : []), "-c", `model_reasoning_effort="${this.cfg.effort}"`];
-    return this.agentsKnown.find((a) => a.key === who)?.run ?? [who];
+    const run_ = this.agentsKnown.find((a) => a.key === who)?.run ?? [who];
+    // pi: --model/--thinking (its README); grok: -m/--effort (xAI's CLI reference).
+    if (who === "pi") return [...run_, ...(this.cfg.model ? ["--model", this.cfg.model] : []), "--thinking", this.cfg.effort];
+    if (who === "grok") return [...run_, ...(this.cfg.model ? ["-m", this.cfg.model] : []), "--effort", this.cfg.effort];
+    return run_;
   }
 
   startAgent(task) {
@@ -862,7 +998,7 @@ export default class Shepherd extends View {
     const sel = this.selected();
     const list = which === "done" ? terms.filter((r) => r.agent && r.status === "done")
       : which === "shells" ? terms.filter((r) => !r.agent)
-      : sel?.kind === "term" ? [sel] : [];
+      : this.targets();
     if (!list.length) return (this.msg = { text: which === "selected" ? T().pickAgent : which === "done" ? T().noneDone : T().noShells });
     const busy = list.filter((r) => r.agent && r.status === "working").length;
     // Closing a space's last tab closes the space too.
@@ -909,6 +1045,7 @@ export default class Shepherd extends View {
       else for (const r of mine) run("terminal.kill", { terminal: r.addr });
     }
     if (this.peeked && list.some((r) => r.addr === this.peekedAddr)) { closeOverlay(this.peeked); this.peeked = null; }
+    for (const r of list) this.marks.delete(r.addr);
     this.msg = { text: T().closed(list.length === 1 ? list[0].name : list.length), ok: true };
   }
 
@@ -927,6 +1064,8 @@ export default class Shepherd extends View {
   options(cmd) {
     if (cmd === "close") return ["selected", "done", "shells", "space"];
     if (cmd === "language") return Object.keys(TEXT);
+    if (cmd === "find") return FIND_WORDS;
+    if (cmd === "preview") return ["on", "off"];
     if (cmd === "machine") return [T().local, ...machines().filter((m) => m.name && !m.temporary).map((m) => m.name)];
     if (cmd === "who") return (this.agentsKnown.length ? this.agentsKnown.filter((a) => a.installed).map((a) => programKey(a) ?? a.key) : ["claude", "codex"]);
     if (cmd === "where") return spaces().map((s) => s.name);
@@ -948,6 +1087,22 @@ export default class Shepherd extends View {
     if (cmd === "new") return this.startAgent(arg);
     if (cmd === "space") return this.newSpace(arg, cx);
     if (cmd === "close") return this.askClose(arg);
+    if (cmd === "yes" || cmd === "no") return this.answer(cmd === "yes" ? ["enter"] : ["esc"], cmd, cx);
+    if (cmd === "answer") return arg ? this.answer(null, arg, cx) : (this.msg = { text: T().enterName(cmd) });
+    if (cmd === "find") { this.filter = arg; this.top = 0; return; }
+    if (cmd === "preview" && arg) {
+      this.cfg.preview = !/^(off|aus|0|no)$/i.test(arg);
+      this.save();
+      return (this.msg = { text: this.cfg.preview ? T().previewOn : T().previewOff, ok: true });
+    }
+    if (cmd === "rename") {
+      const r = this.selected();
+      if (r?.kind !== "term") return (this.msg = { text: T().pickRow });
+      const key = this.sess[r.addr]?.id ?? r.addr;
+      if (arg) this.names[key] = arg; else delete this.names[key];
+      this.save();
+      return (this.msg = { text: arg ? T().renamed(arg) : T().autoName, ok: true });
+    }
     if (cmd === "star") {
       const r = this.selected();
       if (r?.kind !== "term") return;
@@ -962,6 +1117,7 @@ export default class Shepherd extends View {
       set("machine", v === T().local ? null : v, v);
       return cx?.spawn(async (cx) => { await this.loadMachine(); cx.notify(); });
     }
+    if (cmd === "preview" && !arg) { this.input.set_value("/preview "); this.text = "/preview "; return; }
     if (cmd === "language" && !arg) { this.input.set_value("/language "); this.text = "/language "; return; }
     if (cmd === "language") {
       const v = pick(this.options("language"));
@@ -1011,7 +1167,8 @@ export default class Shepherd extends View {
     if (this.confirm && !this.text.trim()) {
       const c = this.confirm;
       this.confirm = null;
-      return c.send ? this.send(c.send, c.text, cx) : this.closeRows(c);
+      if (c.send) { for (const x of c.send) this.send(x, c.text, cx); return; }
+      return this.closeRows(c);
     }
     this.confirm = null;
     const sug = this.suggestions()[this.sugI];
@@ -1025,14 +1182,30 @@ export default class Shepherd extends View {
     this.text = "";
     const m = text.match(/^\/(\w+)\s*(.*)$/);
     if (m) return this.command(m[1].toLowerCase(), m[2].trim(), cx);
-    if (r?.kind !== "term") return (this.msg = { text: T().pickAgentOrNew });
+    const list = this.targets();
+    if (!list.length) return (this.msg = { text: T().pickAgentOrNew });
     // A shell runs what it gets, so text for one is asked about first.
-    if (!r.agent) {
-      this.confirm = { send: r, text };
-      this.msg = { text: `${T().askShell(r.name, text)}  ${T().yesNo}`, color: C.star };
+    const shell = list.find((x) => !x.agent);
+    if (shell) {
+      this.confirm = { send: list, text };
+      this.msg = { text: `${T().askShell(shell.name, text)}  ${T().yesNo}`, color: C.star };
       return;
     }
-    this.send(r, text, cx);
+    for (const x of list) this.send(x, text, cx);
+  }
+
+  // /yes and /no press Enter (the highlighted, usually approving, choice) or Esc in each
+  // blocked target; /answer types text there even though it's blocked.
+  answer(keys, label, cx) {
+    const list = this.targets();
+    if (!list.length) return (this.msg = { text: T().pickAgent });
+    const blocked = list.filter((r) => r.agent && r.status === "blocked");
+    if (!blocked.length) return (this.msg = { text: T().notBlocked(list[0].name) });
+    cx.spawn(async (cx) => {
+      for (const r of blocked) await hc(keys ? ["keys", r.addr, ...keys] : ["send", "--force", r.addr, "--", label]);
+      this.msg = { text: T().answered(blocked.length === 1 ? blocked[0].name : blocked.length, keys ? `/${label}` : label), ok: true };
+      cx.notify();
+    });
   }
 
   send(r, text, cx) {
@@ -1109,8 +1282,14 @@ export default class Shepherd extends View {
     return true;
   }
 
-  click(key, twice, cx) {
+  click(key, twice, cx, mark = false) {
     this.dropConfirm();
+    if (mark) {
+      const r = this.rows.find((x) => x.key === key && x.kind === "term");
+      if (r) this.marks.has(r.addr) ? this.marks.delete(r.addr) : this.marks.add(r.addr);
+      this.msg = { text: T().marked(this.marks.size), color: C.dim };
+      return cx.notify();
+    }
     // A space header selects its first terminal.
     const i = this.rows.findIndex((x) => x.key === key);
     if (this.rows[i]?.kind === "space") key = this.rows[i + 1]?.kind === "term" ? this.rows[i + 1].key : this.selKey;
@@ -1149,8 +1328,13 @@ export default class Shepherd extends View {
   summary(rows) {
     const terms = rows.filter((r) => r.kind === "term" && r.agent);
     const n = (s) => terms.filter((r) => r.status === s).length;
+    // The cost of every session shown.
+    const total = terms.reduce((sum, r) => sum + (this.cost[r.addr] ?? 0), 0);
+    // Boxes widen together when a value (the cost) is longer than two characters.
+    const values = [terms.length, n("working"), n("blocked"), n("done"), ...(total > 0 ? [money(total)] : [])].map(String);
+    const boxW = px(55 + 14 * Math.max(0, ...values.map((v) => v.length - 2)));
     const box = (value, label, bg) => h_flex().h(px(31.4)).items_center()
-      .child(div().w(px(55)).h_full().bg(bg).flex().items_center().justify_end().pr(px(13)).text_color("#111318").child(String(value)))
+      .child(div().w(boxW).flex_none().whitespace_nowrap().h_full().bg(bg).flex().items_center().justify_end().pr(px(13)).text_color("#111318").child(String(value)))
       .child(div().pl(px(14)).text_color(C.idle).child(label));
     return h_flex().flex_none().pt(px(20)).pl(px(15)).h(px(238)).items_start()
       .child(image("mods/shepherd/shepherd.svg").w(px(126)).h(px(196)).flex_none())
@@ -1158,11 +1342,14 @@ export default class Shepherd extends View {
         .child(box(terms.length, "agents", C.box.agents))
         .child(box(n("working"), "working", C.box.working))
         .child(box(n("blocked"), "paused", C.box.paused))
-        .child(box(n("done"), "done", C.box.done)));
+        .child(box(n("done"), "done", C.box.done))
+        .when(total > 0, (el) => el.child(box(money(total), T().cost, C.box.cost))));
   }
 
   rowEl(r, on, now) {
-    const base = h_flex().h(ROW).w_full().items_center().pl(px(15)).whitespace_nowrap().when(on, (el) => el.bg(C.sel));
+    const base = h_flex().h(ROW).w_full().items_center().pl(px(15)).whitespace_nowrap().relative().when(on, (el) => el.bg(C.sel))
+      // A marked row has a bar at its left edge.
+      .when(Boolean(r.mark), (el) => el.child(div().absolute().left_0().top_0().w(px(4)).h_full().bg(C.mark)));
     if (r.kind === "space") {
       return base.child(div().text_color(r.color).font_semibold().child(r.label))
         .child(div().text_color(C.num).child(` · ${r.count}`));
@@ -1196,6 +1383,16 @@ export default class Shepherd extends View {
   }
 
   // Only the rows that fit are drawn; the wheel and the selection move the window.
+  // The selected row's last screen lines, under the list.
+  preview(sel) {
+    const lines = sel?.kind === "term" ? this.screen[sel.addr] : null;
+    if (!this.cfg.preview || !lines?.length) return null;
+    // Fixed height that never gives way, so a short window does not squash the lines.
+    return v_flex().flex_none().h(PREVIEW_LINES * 17 + 12).min_h(PREVIEW_LINES * 17 + 12).px(px(15)).py(6).border_t(1).border_color(C.line)
+      .text_size(12).text_color(C.dim).overflow_hidden()
+      .children(lines.map((l) => div().flex_none().h(17).line_height("17px").whitespace_nowrap().truncate().child(l || " ")));
+  }
+
   list(rows, sel, now) {
     const fit = Math.max(1, Math.floor(this.listH / ROW));
     this.top = Math.max(0, Math.min(this.top, Math.max(0, rows.length - fit)));
@@ -1205,7 +1402,7 @@ export default class Shepherd extends View {
       .on_size_change((size, cx) => { this.listH = size.height; cx.notify(); })
       .on_scroll_wheel((e, cx) => { if (this.scrollBy(e.delta_lines ? e.delta_lines.y * ROW : e.delta.y)) cx.notify(); })
       .children(shown.map((r) => this.rowEl(r, r.key === sel?.key, now).id(`row-${r.key}`)
-        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.click(r.key, e.click_count >= 2, cx); })
+        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.click(r.key, e.click_count >= 2, cx, e.modifiers?.platform); })
         .on_mouse_down("right", (_e, cx) => { this.dropConfirm(); this.selKey = r.key; this.command("star", ""); cx.notify(); })))
       .when(Boolean(thumb), (el) => el.child(div().absolute().right(px(4)).top(thumb.y).w(px(5)).h(thumb.h).rounded(3).bg(C.line)));
   }
@@ -1217,11 +1414,13 @@ export default class Shepherd extends View {
     const ctx = sel?.kind === "term" ? this.ctx[sel.addr] : null;
     const pctColor = (p) => (p >= 80 ? C.blocked : p >= 60 ? C.star : C.done);
     const left = ctx?.cacheUntil ? ctx.cacheUntil - now : null;
-    const q = this.quota[this.cfg.who];
+    // Quota of the selected agent when its kind has one, else of the /who agent.
+    const qKind = sel?.kind === "term" && sel.agent && this.quota[sel.program] ? sel.program : this.cfg.who;
+    const q = this.quota[qKind];
     const sugs = this.suggestions();
     const si = Math.min(this.sugI, Math.max(0, sugs.length - 1));
     const first = Math.max(0, Math.min(si - 3, sugs.length - 7));
-    const placeholder = sel?.kind === "term" ? T().taskFor(sel.name) : T().newIn(this.cfg.who, where);
+    const placeholder = this.marks.size ? T().taskForMarked(this.marks.size) : sel?.kind === "term" ? T().taskFor(sel.name) : T().newIn(this.cfg.who, where);
     return v_flex().flex_none().border_t(1).border_color(C.line).px(px(15)).pt(px(10)).pb(px(14)).gap(px(8))
       .when(sugs.length > 0, (el) => el.child(v_flex().flex_none().text_size(14)
         .children(sugs.slice(first, first + 7).map((g, j) => h_flex().id(`sug-${first + j}`).h(px(26)).px(px(10)).gap(px(16)).items_center().rounded(4).cursor_pointer()
@@ -1231,6 +1430,8 @@ export default class Shepherd extends View {
           .when(Boolean(g.desc), (el) => el.child(div().text_color(C.dim).truncate().child(g.desc)))))
         .child(div().h(px(18)).px(px(10)).text_size(12).text_color(C.dim)
           .child(`${T().sugHint(sugs[si]?.final)}${sugs.length > 7 ? ` · ${si + 1}/${sugs.length}` : ""}`))))
+      .when(!sugs.length && !this.msg && Boolean(this.filter), (el) => el.child(h_flex().h(ROW).flex_none().items_center().text_color(C.dim).truncate()
+        .child(T().filter(this.filter, this.rows.filter((r) => r.kind === "term").length))))
       .when(!sugs.length && Boolean(this.msg), (el) => el.child(h_flex().h(ROW).flex_none().items_center().text_color(this.msg.color ?? (this.msg.ok ? C.done : C.blocked)).truncate().child(this.msg.text)))
       .child(h_flex().id("line").h(ROW).items_center().gap(px(14)).cursor_text()
         .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.input.focus(); })
@@ -1250,7 +1451,8 @@ export default class Shepherd extends View {
         .child(kv("cache", left == null ? "—" : left > 60000 ? T().cacheLeft(Math.floor(left / 60000)) : left > 0 ? T().cacheLt1 : T().expired, left > 0 ? C.done : C.blocked))
         .children((q?.windows ?? []).filter(([, w]) => w?.used_percentage != null).map(([k, w]) =>
           kv(k, `${Math.round(w.used_percentage)}%${w.resets_at ? `  ↻ ${clock(w.resets_at)}` : ""}`, pctColor(w.used_percentage))))
-        .when(!q, (el) => el.child(kv("quota", T().noQuota(this.cfg.who), C.dim)))
+        .when(!q, (el) => el.child(kv("quota", T().noQuota(qKind), C.dim)))
+        .when(sel?.kind === "term" && this.cost[sel.addr] != null, (el) => el.child(kv(T().cost, money(this.cost[sel?.addr] ?? 0))))
         // Herdr's settings, far right.
         .child(div().flex_1())
         .child(div().id("settings").flex_none().p(px(3)).rounded(4).cursor_pointer().text_color(C.dim)
@@ -1293,14 +1495,14 @@ export default class Shepherd extends View {
         const k = e.key;
         const sugs = this.suggestions();
         if (sugs.length && (k === "up" || k === "down")) this.sugI = (this.sugI + (k === "up" ? -1 : 1) + sugs.length) % sugs.length;
-        else if (k === "up") this.move(-1, cx);
-        else if (k === "down") this.move(1, cx);
+        else if (k === "up") this.move(-1, cx, e.modifiers.shift);
+        else if (k === "down") this.move(1, cx, e.modifiers.shift);
         else if (k === "pageup") this.move(-15, cx);
         else if (k === "pagedown") this.move(15, cx);
         else if (k === "backspace" && e.modifiers.platform && !this.text) this.askClose();
         else if (k === "enter" && e.modifiers.platform) this.toLine();
         else if (k === "tab") this.accept(sugs[this.sugI] && { ...sugs[this.sugI], final: false }, cx);
-        else if (k === "escape") { this.input.set_value(""); this.text = ""; this.msg = null; this.confirm = null; }
+        else if (k === "escape") { if (this.confirm) { this.confirm = null; this.msg = null; } else this.escape(); }
         else return;
         cx.stop_propagation();
         cx.notify();
@@ -1308,6 +1510,7 @@ export default class Shepherd extends View {
       .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.input.focus(); })
       .child(this.summary(rows))
       .child(this.list(rows, sel, now))
+      .children([this.preview(sel)].filter(Boolean))
       .child(this.footer(sel, now));
   }
 }
