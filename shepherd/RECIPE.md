@@ -197,7 +197,9 @@ from a 23px mock-up scaled by 15/23, so a row is 20.5px tall and one character c
   re-renders too much.
 - Read transcripts with `python3`, not `readTextFile`. One message with an image is a
   multi-MB line.
-- The pending `/close` confirmation must clear as soon as anything is typed.
+- A pending confirmation (`/close`, or text for a shell) must clear as soon as anything is
+  typed and on every selection change (↑/↓, PageUp/PageDown, click, right click). Otherwise
+  Enter, meant to open the newly selected row, would still send or close.
 - Closing the peek hands the keyboard back to its terminal, so the line is focused again after
   80ms. A peek can also close without the mod (its ✕, a click beside it, its terminal ending),
   so a guard copy of the mod rides in it as a 0px block, `{ mod: "shepherd", props: { guard:

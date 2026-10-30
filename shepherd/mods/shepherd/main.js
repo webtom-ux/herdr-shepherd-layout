@@ -610,7 +610,16 @@ export default class Shepherd extends View {
   }
 
   // Steps over space headers: only terminals take a task.
+  // A pending question belongs to the row it was asked on: moving away drops it, so Enter
+  // does what the new row expects instead of sending or closing after all.
+  dropConfirm() {
+    if (!this.confirm) return;
+    this.confirm = null;
+    this.msg = null;
+  }
+
   move(by, cx) {
+    this.dropConfirm();
     const terms = this.rows.filter((r) => r.kind === "term");
     if (!terms.length) return;
     const i = Math.max(0, terms.findIndex((r) => r.key === this.selected()?.key));
@@ -967,6 +976,7 @@ export default class Shepherd extends View {
   }
 
   click(key, twice, cx) {
+    this.dropConfirm();
     // A space header selects its first terminal.
     const i = this.rows.findIndex((x) => x.key === key);
     if (this.rows[i]?.kind === "space") key = this.rows[i + 1]?.kind === "term" ? this.rows[i + 1].key : this.selKey;
@@ -1062,7 +1072,7 @@ export default class Shepherd extends View {
       .on_scroll_wheel((e, cx) => { if (this.scrollBy(e.delta_lines ? e.delta_lines.y * ROW : e.delta.y)) cx.notify(); })
       .children(shown.map((r) => this.rowEl(r, r.key === sel?.key, now).id(`row-${r.key}`)
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.click(r.key, e.click_count >= 2, cx); })
-        .on_mouse_down("right", (_e, cx) => { this.selKey = r.key; this.command("star", ""); cx.notify(); })))
+        .on_mouse_down("right", (_e, cx) => { this.dropConfirm(); this.selKey = r.key; this.command("star", ""); cx.notify(); })))
       .when(Boolean(thumb), (el) => el.child(div().absolute().right(px(4)).top(thumb.y).w(px(5)).h(thumb.h).rounded(3).bg(C.line)));
   }
 

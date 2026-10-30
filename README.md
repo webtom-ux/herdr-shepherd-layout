@@ -111,7 +111,8 @@ A command without a value (e.g. `/effort` + `Enter`) opens the list of values it
 | `/close shells` | Close all shells |
 | `/close space [name]` | Close a whole space with all its agents and shells (without a name: the selected one) |
 
-`/close` always asks first: `Enter` = yes, `Esc` = no, and typing anything else also cancels.
+`/close` always asks first: `Enter` = yes, `Esc` = no, and typing anything else or moving to
+another row also cancels.
 The question warns when agents are still working, or when the last tab of a space (and so the
 space itself) would close.
 
